@@ -290,6 +290,7 @@ splitTApps = view _TApps
 typeConAppToType :: TypeConApp -> Type
 typeConAppToType (TypeConApp tcon targs) = TConApp tcon targs
 
+
 -- Compatibility type and functions
 
 data Definition
