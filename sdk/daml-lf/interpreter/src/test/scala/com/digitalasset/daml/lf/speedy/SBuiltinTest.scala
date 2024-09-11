@@ -1899,6 +1899,7 @@ class SBuiltinTest(majorLanguageVersion: LanguageMajorVersion)
       (description, expr) <- List(
         "when exercising a choice" -> e"Mod:exerciseFailingPreconditionAndCatchError",
         "when fetching a contract" -> e"Mod:fetchFailingPreconditionAndCatchError",
+        "when fetching a contract by interface" -> e"Mod:fetchFailingPreconditionByInterfaceAndCatchError",
       )
     } {
       s"cannot be caught $description" in {
@@ -2009,7 +2010,7 @@ final class SBuiltinTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
           val aliceOwesBob : Mod:Iou = Mod:Iou { i = Mod:alice, u = Mod:bob, name = "alice owes bob" };
           val aliceOwesBobIface : Mod:Iface = to_interface @Mod:Iface @Mod:Iou Mod:aliceOwesBob;
 
-          // a template whose precondition always evaluates to false
+          // A template whose precondition always evaluates to false
           record @serializable FailingPrecondition = { p: Party };
           template (this: FailingPrecondition) = {
             // Damlc will trhow DA.Exception.PreconditionFailed:PreconditionFailed but the engine expects no particular
@@ -2023,6 +2024,8 @@ final class SBuiltinTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
               , controllers (Nil @Party)
               , observers (Nil @Party)
               to upure @Text "SomeChoice was called";
+
+            implements Mod:Iface { view = Mod:MyUnit {}; };
           };
 
           // checks that the FailedPrecondition error thrown when creating a FailingPrecondition instance can be caught
@@ -2041,9 +2044,9 @@ final class SBuiltinTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
               try @Text
                 exercise @Mod:FailingPrecondition SomeChoice cid ()
               catch
-                e -> Some @(Update Text) (upure @Text "some exception was caught");
+                e -> Some @(Update Text) (upure @Text "unexpected: some exception was caught");
 
-          // Tries to catch the error throw by the ensure clause of FailingPrecondition when exercising a choice on it,
+          // Tries to catch the error throw by the ensure clause of a FailingPrecondition contract when fetching it,
           // should fail to do so.
           val fetchFailingPreconditionAndCatchError: (ContractId Mod:FailingPrecondition) -> Update Text =
             \(cid: ContractId Mod:FailingPrecondition) ->
@@ -2051,13 +2054,20 @@ final class SBuiltinTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
                 ubind _:Mod:FailingPrecondition <- fetch_template @Mod:FailingPrecondition cid
                 in upure @Text "unexpected: contract was fetched"
               catch
-                e -> Some @(Update Text) (upure @Text "some exception was caught");
+                e -> Some @(Update Text) (upure @Text "unexpected: some exception was caught");
+
+          // Tries to catch the error throw by the ensure clause of a FailingPrecondition contract when fetching it by
+          // interface, should fail to do so.
+          val fetchFailingPreconditionByInterfaceAndCatchError: (ContractId Mod:FailingPrecondition) -> Update Text =
+            \(cid: ContractId Mod:FailingPrecondition) ->
+              try @Text
+                ubind _:Mod:Iface <-
+                    fetch_interface @Mod:Iface (COERCE_CONTRACT_ID @Mod:FailingPrecondition @Mod:Iface cid)
+                in upure @Text "unexpected: contract was fetched by interface"
+              catch
+                e -> Some @(Update Text) (upure @Text "unexpected: some exception was caught");
         }
     """
-
-  print(
-    s"""precondition throw @Bool @${StablePackagesV1.DA_Exception_PreconditionFailed.packageId}:DA.Exception.PreconditionFailed:PreconditionFailed (${StablePackagesV1.DA_Exception_PreconditionFailed.packageId}:DA.Exception.PreconditionFailed:PreconditionFailed { message = "" });"""
-  )
 
   val txVersion = TransactionVersion.assignNodeVersion(pkg.languageVersion)
 
