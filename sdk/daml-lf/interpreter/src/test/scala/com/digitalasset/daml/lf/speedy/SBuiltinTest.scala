@@ -1895,33 +1895,40 @@ class SBuiltinTest(majorLanguageVersion: LanguageMajorVersion)
       evalUpdateOnLedger(e"Mod:createFailingPreconditionAndCatchError") shouldBe Right(SUnit)
     }
 
-    "cannot be caught when exercising a choice" in {
-      inside {
-        val cid = Value.ContractId.V1(Hash.hashPrivateKey("abc"))
-        evalUpdateAppOnLedger(
-          e"Mod:exerciseFailingPreconditionAndCatchError",
-          Array(SContractId(cid)),
-          getContract = Map(
-            cid -> Versioned(
-              version = TransactionVersion.StableVersions.max,
-              Value.ContractInstance(
-                packageName = pkg.name,
-                template = t"Mod:FailingPrecondition".asInstanceOf[Ast.TTyCon].tycon,
-                arg = Value.ValueRecord(None, ImmArray(None -> Value.ValueParty(alice))),
-              ),
-            )
-          ),
-        )
-      } {
-        case Left(
-              SError.SErrorDamlException(
-                IE.UnhandledException(
-                  _,
-                  Value.ValueRecord(_, ImmArray((_, Value.ValueText(msg)))),
-                )
+    for {
+      (description, expr) <- List(
+        "when exercising a choice" -> e"Mod:exerciseFailingPreconditionAndCatchError",
+        "when fetching a contract" -> e"Mod:fetchFailingPreconditionAndCatchError",
+      )
+    } {
+      s"cannot be caught $description" in {
+        inside {
+          val cid = Value.ContractId.V1(Hash.hashPrivateKey("abc"))
+          evalUpdateAppOnLedger(
+            expr,
+            Array(SContractId(cid)),
+            getContract = Map(
+              cid -> Versioned(
+                version = TransactionVersion.StableVersions.max,
+                Value.ContractInstance(
+                  packageName = pkg.name,
+                  template = t"Mod:FailingPrecondition".asInstanceOf[Ast.TTyCon].tycon,
+                  arg = Value.ValueRecord(None, ImmArray(None -> Value.ValueParty(alice))),
+                ),
               )
-            ) =>
-          msg shouldBe "failed precondition"
+            ),
+          )
+        } {
+          case Left(
+                SError.SErrorDamlException(
+                  IE.UnhandledException(
+                    _,
+                    Value.ValueRecord(_, ImmArray((_, Value.ValueText(msg)))),
+                  )
+                )
+              ) =>
+            msg shouldBe "failed precondition"
+        }
       }
     }
   }
@@ -2033,6 +2040,16 @@ final class SBuiltinTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
             \(cid: ContractId Mod:FailingPrecondition) ->
               try @Text
                 exercise @Mod:FailingPrecondition SomeChoice cid ()
+              catch
+                e -> Some @(Update Text) (upure @Text "some exception was caught");
+
+          // Tries to catch the error throw by the ensure clause of FailingPrecondition when exercising a choice on it,
+          // should fail to do so.
+          val fetchFailingPreconditionAndCatchError: (ContractId Mod:FailingPrecondition) -> Update Text =
+            \(cid: ContractId Mod:FailingPrecondition) ->
+              try @Text
+                ubind _:Mod:FailingPrecondition <- fetch_template @Mod:FailingPrecondition cid
+                in upure @Text "unexpected: contract was fetched"
               catch
                 e -> Some @(Update Text) (upure @Text "some exception was caught");
         }
