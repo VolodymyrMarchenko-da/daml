@@ -1817,6 +1817,7 @@ class SBuiltinTest(majorLanguageVersion: LanguageMajorVersion)
                 ),
               )
             ),
+            getKey = PartialFunction.empty,
           )
         ) { case Right((SUnit, disclosedContracts, disclosedContractKeys)) =>
           disclosedContracts shouldBe Map(contractId -> contractInfo)
@@ -1881,6 +1882,7 @@ class SBuiltinTest(majorLanguageVersion: LanguageMajorVersion)
                 ),
               )
             ),
+            getKey = PartialFunction.empty,
           )
         ) { case Right((SUnit, disclosedContracts, disclosedContractKeys)) =>
           disclosedContracts shouldBe Map(contractId -> contractInfo)
@@ -1895,19 +1897,41 @@ class SBuiltinTest(majorLanguageVersion: LanguageMajorVersion)
       evalUpdateOnLedger(e"Mod:createFailingPreconditionAndCatchError") shouldBe Right(SUnit)
     }
 
-    for {
-      (description, expr) <- List(
-        "when exercising a choice" -> e"Mod:exerciseFailingPreconditionAndCatchError",
-        "when fetching a contract" -> e"Mod:fetchFailingPreconditionAndCatchError",
-        "when fetching a contract by interface" -> e"Mod:fetchFailingPreconditionByInterfaceAndCatchError",
+    s"cannot be caught in any other case" in {
+      val templateId = Ref.Identifier.assertFromString("-pkgId-:Mod:FailingPrecondition")
+      val cid = Value.ContractId.V1(Hash.hashPrivateKey("abc"))
+      val key = SValue.SRecord(
+        templateId,
+        ImmArray(
+          Ref.Name.assertFromString("label"),
+          Ref.Name.assertFromString("maintainers"),
+        ),
+        ArrayList(
+          SValue.SText("test-key"),
+          SValue.SList(FrontStack(SValue.SParty(alice))),
+        ),
       )
-    } {
-      s"cannot be caught $description" in {
+      val globalKey = GlobalKeyWithMaintainers.assertBuild(
+        templateId,
+        key.toUnnormalizedValue,
+        Set(alice),
+        KeyPackageName(pkg.name, pkg.languageVersion),
+      )
+
+      val testCases = Table[Expr, SValue](
+        ("expression", "arg"),
+        (e"Mod:exerciseFailingPreconditionAndCatchError", SContractId(cid)),
+        (e"Mod:fetchFailingPreconditionAndCatchError", SContractId(cid)),
+        (e"Mod:fetchFailingPreconditionByInterfaceAndCatchError", SContractId(cid)),
+        (e"Mod:fetchFailingPreconditionByKeyAndCatchError", key),
+        (e"Mod:lookUpFailingPreconditionByKeyAndCatchError", key),
+      )
+
+      forEvery(testCases) { (expr, arg) =>
         inside {
-          val cid = Value.ContractId.V1(Hash.hashPrivateKey("abc"))
           evalUpdateAppOnLedger(
             expr,
-            Array(SContractId(cid)),
+            Array(arg),
             getContract = Map(
               cid -> Versioned(
                 version = TransactionVersion.StableVersions.max,
@@ -1917,6 +1941,9 @@ class SBuiltinTest(majorLanguageVersion: LanguageMajorVersion)
                   arg = Value.ValueRecord(None, ImmArray(None -> Value.ValueParty(alice))),
                 ),
               )
+            ),
+            getKey = Map(
+              globalKey -> cid
             ),
           )
         } {
@@ -2026,6 +2053,13 @@ final class SBuiltinTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
               to upure @Text "SomeChoice was called";
 
             implements Mod:Iface { view = Mod:MyUnit {}; };
+
+            key @Mod:Key
+              (Mod:Key {
+                 label = "test-key",
+                 maintainers = (Cons @Party [Mod:FailingPrecondition {p} this] (Nil @Party))
+              })
+              (\(key: Mod:Key) -> (Mod:Key {maintainers} key));
           };
 
           // checks that the FailedPrecondition error thrown when creating a FailingPrecondition instance can be caught
@@ -2066,6 +2100,28 @@ final class SBuiltinTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
                 in upure @Text "unexpected: contract was fetched by interface"
               catch
                 e -> Some @(Update Text) (upure @Text "unexpected: some exception was caught");
+
+          // Tries to catch the error throw by the ensure clause of a FailingPrecondition contract when fetching it by
+          // key, should fail to do so.
+          val fetchFailingPreconditionByKeyAndCatchError: Mod:Key -> Update Text =
+            \(key: Mod:Key) ->
+              try @Text
+                ubind _:<contract: Mod:FailingPrecondition, contractId: ContractId Mod:FailingPrecondition> <-
+                    fetch_by_key @Mod:FailingPrecondition key
+                in upure @Text "unexpected: contract was fetched by key"
+              catch
+                e -> Some @(Update Text) (upure @Text "unexpected: some exception was caught");
+
+          // Tries to catch the error throw by the ensure clause of a FailingPrecondition contract when looking it up by
+          // key, should fail to do so.
+          val lookUpFailingPreconditionByKeyAndCatchError: Mod:Key -> Update Text =
+            \(key: Mod:Key) ->
+              try @Text
+                ubind _:Option (ContractId Mod:FailingPrecondition) <-
+                    lookup_by_key @Mod:FailingPrecondition key
+                in upure @Text "unexpected: contract was looked up by key"
+              catch
+                e -> Some @(Update Text) (upure @Text "unexpected: some exception was caught");
         }
     """
 
@@ -2098,18 +2154,22 @@ final class SBuiltinTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
       e: Expr,
       args: Array[SValue],
       getContract: PartialFunction[Value.ContractId, Value.VersionedContractInstance] = Map.empty,
+      getKey: PartialFunction[GlobalKeyWithMaintainers, Value.ContractId] = Map.empty,
   ): Either[SError, SValue] =
-    evalOnLedger(SEApp(compiledPackages.compiler.unsafeCompile(e), args), getContract).map(_._1)
+    evalOnLedger(SEApp(compiledPackages.compiler.unsafeCompile(e), args), getContract, getKey)
+      .map(_._1)
 
   def evalOnLedger(
       e: Expr,
       getContract: PartialFunction[Value.ContractId, Value.VersionedContractInstance] = Map.empty,
+      getKey: PartialFunction[GlobalKeyWithMaintainers, Value.ContractId] = Map.empty,
   ): Either[SError, SValue] =
-    evalOnLedger(compiledPackages.compiler.unsafeCompile(e), getContract).map(_._1)
+    evalOnLedger(compiledPackages.compiler.unsafeCompile(e), getContract, getKey).map(_._1)
 
   def evalOnLedger(
       sexpr: SExpr,
       getContract: PartialFunction[Value.ContractId, Value.VersionedContractInstance],
+      getKey: PartialFunction[GlobalKeyWithMaintainers, Value.ContractId],
   ): Either[
     SError,
     (
@@ -2117,25 +2177,32 @@ final class SBuiltinTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
         Map[Value.ContractId, ContractInfo],
         Map[GlobalKey, Value.ContractId],
     ),
-  ] = evalUpdateOnLedger(SELet1(sexpr, SEMakeClo(Array(SELocS(1)), 1, SELocF(0))), getContract)
+  ] = evalUpdateOnLedger(
+    SELet1(sexpr, SEMakeClo(Array(SELocS(1)), 1, SELocF(0))),
+    getContract,
+    getKey,
+  )
 
   def evalUpdateOnLedger(
       e: Expr,
       getContract: PartialFunction[Value.ContractId, Value.VersionedContractInstance] = Map.empty,
+      getKey: PartialFunction[GlobalKeyWithMaintainers, Value.ContractId] = Map.empty,
   ): Either[SError, SValue] =
-    evalUpdateOnLedger(compiledPackages.compiler.unsafeCompile(e), getContract).map(_._1)
+    evalUpdateOnLedger(compiledPackages.compiler.unsafeCompile(e), getContract, getKey).map(_._1)
 
   def evalUpdateAppOnLedger(
       e: Expr,
       args: Array[SValue],
       getContract: PartialFunction[Value.ContractId, Value.VersionedContractInstance] = Map.empty,
+      getKey: PartialFunction[GlobalKeyWithMaintainers, Value.ContractId] = Map.empty,
   ): Either[SError, SValue] =
-    evalUpdateOnLedger(SEApp(compiledPackages.compiler.unsafeCompile(e), args), getContract)
+    evalUpdateOnLedger(SEApp(compiledPackages.compiler.unsafeCompile(e), args), getContract, getKey)
       .map(_._1)
 
   def evalUpdateOnLedger(
       sexpr: SExpr,
       getContract: PartialFunction[Value.ContractId, Value.VersionedContractInstance],
+      getKey: PartialFunction[GlobalKeyWithMaintainers, Value.ContractId],
   ): Either[
     SError,
     (
@@ -2153,7 +2220,7 @@ final class SBuiltinTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
       )
 
     SpeedyTestLib
-      .run(machine, getContract = getContract)
+      .run(machine, getContract = getContract, getKey = getKey)
       .map(
         (_, machine.disclosedContracts, machine.disclosedContractKeys)
       )
