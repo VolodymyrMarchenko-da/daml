@@ -1892,70 +1892,74 @@ class SBuiltinTest(majorLanguageVersion: LanguageMajorVersion)
     }
   }
 
-  "ensure clause exception" - {
-    "can be caught on when creating a contract" in {
-      evalUpdateOnLedger(e"Mod:createFailingPreconditionAndCatchError") shouldBe Right(SUnit)
-    }
+  for {
+    component <- List("Precondition", "Signatories", "Observers", "Agreement")
+  } {
+    s"${component} exception" - {
+      "can be caught on when creating a contract" in {
+        evalUpdateOnLedger(e"Mod:createFailing${component}AndCatchError") shouldBe Right(SUnit)
+      }
 
-    s"cannot be caught in any other case" in {
-      val templateId = Ref.Identifier.assertFromString("-pkgId-:Mod:FailingPrecondition")
-      val cid = Value.ContractId.V1(Hash.hashPrivateKey("abc"))
-      val key = SValue.SRecord(
-        templateId,
-        ImmArray(
-          Ref.Name.assertFromString("label"),
-          Ref.Name.assertFromString("maintainers"),
-        ),
-        ArrayList(
-          SValue.SText("test-key"),
-          SValue.SList(FrontStack(SValue.SParty(alice))),
-        ),
-      )
-      val globalKey = GlobalKeyWithMaintainers.assertBuild(
-        templateId,
-        key.toUnnormalizedValue,
-        Set(alice),
-        KeyPackageName(pkg.name, pkg.languageVersion),
-      )
+      s"cannot be caught in any other case" in {
+        val templateId = Ref.Identifier.assertFromString(s"-pkgId-:Mod:Failing${component}")
+        val cid = Value.ContractId.V1(Hash.hashPrivateKey("abc"))
+        val key = SValue.SRecord(
+          templateId,
+          ImmArray(
+            Ref.Name.assertFromString("label"),
+            Ref.Name.assertFromString("maintainers"),
+          ),
+          ArrayList(
+            SValue.SText("test-key"),
+            SValue.SList(FrontStack(SValue.SParty(alice))),
+          ),
+        )
+        val globalKey = GlobalKeyWithMaintainers.assertBuild(
+          templateId,
+          key.toUnnormalizedValue,
+          Set(alice),
+          KeyPackageName(pkg.name, pkg.languageVersion),
+        )
 
-      val testCases = Table[Expr, SValue](
-        ("expression", "arg"),
-        (e"Mod:exerciseFailingPreconditionAndCatchError", SContractId(cid)),
-        (e"Mod:fetchFailingPreconditionAndCatchError", SContractId(cid)),
-        (e"Mod:fetchFailingPreconditionByInterfaceAndCatchError", SContractId(cid)),
-        (e"Mod:fetchFailingPreconditionByKeyAndCatchError", key),
-        (e"Mod:lookUpFailingPreconditionByKeyAndCatchError", key),
-      )
+        val testCases = Table[Expr, SValue](
+          ("expression", "arg"),
+          (e"Mod:exerciseFailing${component}AndCatchError", SContractId(cid)),
+          (e"Mod:fetchFailing${component}AndCatchError", SContractId(cid)),
+          (e"Mod:fetchFailing${component}ByInterfaceAndCatchError", SContractId(cid)),
+          (e"Mod:fetchFailing${component}ByKeyAndCatchError", key),
+          (e"Mod:lookUpFailing${component}ByKeyAndCatchError", key),
+        )
 
-      forEvery(testCases) { (expr, arg) =>
-        inside {
-          evalUpdateAppOnLedger(
-            expr,
-            Array(arg),
-            getContract = Map(
-              cid -> Versioned(
-                version = TransactionVersion.StableVersions.max,
-                Value.ContractInstance(
-                  packageName = pkg.name,
-                  template = t"Mod:FailingPrecondition".asInstanceOf[Ast.TTyCon].tycon,
-                  arg = Value.ValueRecord(None, ImmArray(None -> Value.ValueParty(alice))),
-                ),
-              )
-            ),
-            getKey = Map(
-              globalKey -> cid
-            ),
-          )
-        } {
-          case Left(
-                SError.SErrorDamlException(
-                  IE.UnhandledException(
-                    _,
-                    Value.ValueRecord(_, ImmArray((_, Value.ValueText(msg)))),
-                  )
+        forEvery(testCases) { (expr, arg) =>
+          inside {
+            evalUpdateAppOnLedger(
+              expr,
+              Array(arg),
+              getContract = Map(
+                cid -> Versioned(
+                  version = TransactionVersion.StableVersions.max,
+                  Value.ContractInstance(
+                    packageName = pkg.name,
+                    template = t"Mod:Failing${component}".asInstanceOf[Ast.TTyCon].tycon,
+                    arg = Value.ValueRecord(None, ImmArray(None -> Value.ValueParty(alice))),
+                  ),
                 )
-              ) =>
-            msg shouldBe "failed precondition"
+              ),
+              getKey = Map(
+                globalKey -> cid
+              ),
+            )
+          } {
+            case Left(
+                  SError.SErrorDamlException(
+                    IE.UnhandledException(
+                      _,
+                      Value.ValueRecord(_, ImmArray((_, Value.ValueText(msg)))),
+                    )
+                  )
+                ) =>
+              msg shouldBe s"failed ${component}"
+          }
         }
       }
     }
@@ -1969,8 +1973,116 @@ final class SBuiltinTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
   implicit val parserParameters: ParserParameters[this.type] =
     ParserParameters.defaultFor(majorLanguageVersion)
 
+  // Defines a template called Failing${componentName} with the provided precondition, signatories, observer and
+  // agreement expressions. The intent is that one of them (e.g. precondition) throws an exception while the others
+  // evaluate to a value. Then defines a series of expressions testing that the exception can only be caught in a create
+  // call, but not in any other situation. This function is called below, once per component, in the definition of
+  // pkg.
+  def failingContractId(
+      componentName: String,
+      precondition: String,
+      signatories: String,
+      observers: String,
+      agreement: String,
+  ): String = {
+    print(
+      (
+        componentName: String,
+        precondition: String,
+        signatories: String,
+        observers: String,
+        agreement: String,
+      )
+    )
+    s"""
+      |  // A template whose ${componentName} always evaluates to false
+      |  record @serializable Failing${componentName} = { p: Party };
+      |  template (this: Failing${componentName}) = {
+      |    precondition ${precondition};
+      |    signatories ${signatories};
+      |    observers ${observers};
+      |    agreement ${agreement};
+      |
+      |    choice @nonConsuming SomeChoice (self) (u: Unit): Text
+      |      , controllers (Nil @Party)
+      |      , observers (Nil @Party)
+      |      to upure @Text "SomeChoice was called";
+      |
+      |    implements Mod:Iface { view = Mod:MyUnit {}; };
+      |
+      |    key @Mod:Key
+      |      (Mod:Key {
+      |         label = "test-key",
+      |         maintainers = (Cons @Party [Mod:Failing${componentName} {p} this] (Nil @Party))
+      |      })
+      |      (\\(key: Mod:Key) -> (Mod:Key {maintainers} key));
+      |  };
+      |
+      |  // Checks that the error thrown when creating a Failing${componentName} instance can be caught.
+      |  val createFailing${componentName}AndCatchError: Update Unit =
+      |    try @Unit
+      |      ubind _:(ContractId Mod:Failing${componentName}) <-
+      |          create @Mod:Failing${componentName} (Mod:Failing${componentName} { p = Mod:alice })
+      |      in upure @Unit ()
+      |    catch
+      |      e -> Some @(Update Unit) (upure @Unit ());
+      |
+      |  // Tries to catch the error throw by the contract info of Failing${componentName} when exercising a choice on
+      |  // it, should fail to do so.
+      |  val exerciseFailing${componentName}AndCatchError: (ContractId Mod:Failing${componentName}) -> Update Text =
+      |    \\(cid: ContractId Mod:Failing${componentName}) ->
+      |      try @Text
+      |        exercise @Mod:Failing${componentName} SomeChoice cid ()
+      |      catch
+      |        e -> Some @(Update Text) (upure @Text "unexpected: some exception was caught");
+      |
+      |  // Tries to catch the error throw by the contract info of a Failing${componentName} contract when fetching it,
+      |  // should fail to do so.
+      |  val fetchFailing${componentName}AndCatchError: (ContractId Mod:Failing${componentName}) -> Update Text =
+      |    \\(cid: ContractId Mod:Failing${componentName}) ->
+      |      try @Text
+      |        ubind _:Mod:Failing${componentName} <- fetch_template @Mod:Failing${componentName} cid
+      |        in upure @Text "unexpected: contract was fetched"
+      |      catch
+      |        e -> Some @(Update Text) (upure @Text "unexpected: some exception was caught");
+      |
+      |  // Tries to catch the error throw by the contract info of a Failing${componentName} contract when fetching it
+      |  // by interface, should fail to do so.
+      |  val fetchFailing${componentName}ByInterfaceAndCatchError: (ContractId Mod:Failing${componentName}) -> Update Text =
+      |    \\(cid: ContractId Mod:Failing${componentName}) ->
+      |      try @Text
+      |        ubind _:Mod:Iface <-
+      |            fetch_interface @Mod:Iface (COERCE_CONTRACT_ID @Mod:Failing${componentName} @Mod:Iface cid)
+      |        in upure @Text "unexpected: contract was fetched by interface"
+      |      catch
+      |        e -> Some @(Update Text) (upure @Text "unexpected: some exception was caught");
+      |
+      |  // Tries to catch the error throw by the contract info of a Failing${componentName} contract when fetching it
+      |  // by key, should fail to do so.
+      |  val fetchFailing${componentName}ByKeyAndCatchError: Mod:Key -> Update Text =
+      |    \\(key: Mod:Key) ->
+      |      try @Text
+      |        ubind _:<contract: Mod:Failing${componentName}, contractId: ContractId Mod:Failing${componentName}> <-
+      |            fetch_by_key @Mod:Failing${componentName} key
+      |        in upure @Text "unexpected: contract was fetched by key"
+      |      catch
+      |        e -> Some @(Update Text) (upure @Text "unexpected: some exception was caught");
+      |
+      |  // Tries to catch the error throw by the contract info of a Failing${componentName} contract when looking it up
+      |  // by key, should fail to do so.
+      |  val lookUpFailing${componentName}ByKeyAndCatchError: Mod:Key -> Update Text =
+      |    \\(key: Mod:Key) ->
+      |      try @Text
+      |        ubind _:Option (ContractId Mod:Failing${componentName}) <-
+      |            lookup_by_key @Mod:Failing${componentName} key
+      |        in upure @Text "unexpected: contract was looked up by key"
+      |      catch
+      |        e -> Some @(Update Text) (upure @Text "unexpected: some exception was caught");
+      |""".stripMargin
+  }
+
   lazy val pkg =
-    p"""  metadata ( '-sbuiltin-test-' : '1.0.0' )
+    p"""metadata ( '-sbuiltin-test-' : '1.0.0' )
         module Mod {
           variant Either a b = Left : a | Right : b ;
           record @serializable MyUnit = { };
@@ -2037,91 +2149,37 @@ final class SBuiltinTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
           val aliceOwesBob : Mod:Iou = Mod:Iou { i = Mod:alice, u = Mod:bob, name = "alice owes bob" };
           val aliceOwesBobIface : Mod:Iface = to_interface @Mod:Iface @Mod:Iou Mod:aliceOwesBob;
 
-          // A template whose precondition always evaluates to false
-          record @serializable FailingPrecondition = { p: Party };
-          template (this: FailingPrecondition) = {
-            // Damlc will trhow DA.Exception.PreconditionFailed:PreconditionFailed but the engine expects no particular
-            // exception type so we can throw Ex1 without modifying the outcome of the tests.
-            precondition throw @Bool @Mod:Ex1 (Mod:Ex1 {message = "failed precondition"});
-            signatories Cons @Party [Mod:FailingPrecondition {p} this] (Nil @Party);
-            observers Nil @Party;
-            agreement "Agreement";
+          ${failingContractId(
+        componentName = "Precondition",
+        precondition = """throw @Bool @Mod:Ex1 (Mod:Ex1 {message = "failed Precondition"})""",
+        signatories = """Cons @Party [Mod:FailingPrecondition {p} this] (Nil @Party)""",
+        observers = """Nil @Party""",
+        agreement = """ "Agreement" """,
+      )}
 
-            choice @nonConsuming SomeChoice (self) (u: Unit): Text
-              , controllers (Nil @Party)
-              , observers (Nil @Party)
-              to upure @Text "SomeChoice was called";
+          ${failingContractId(
+        componentName = "Signatories",
+        precondition = """True""",
+        signatories = """throw @(List Party) @Mod:Ex1 (Mod:Ex1 {message = "failed Signatories"})""",
+        observers = """Nil @Party""",
+        agreement = """ "Agreement" """,
+      )}
 
-            implements Mod:Iface { view = Mod:MyUnit {}; };
+          ${failingContractId(
+        componentName = "Observers",
+        precondition = """True""",
+        signatories = """Cons @Party [Mod:FailingObservers {p} this] (Nil @Party)""",
+        observers = """throw @(List Party) @Mod:Ex1 (Mod:Ex1 {message = "failed Observers"})""",
+        agreement = """ "Agreement" """,
+      )}
 
-            key @Mod:Key
-              (Mod:Key {
-                 label = "test-key",
-                 maintainers = (Cons @Party [Mod:FailingPrecondition {p} this] (Nil @Party))
-              })
-              (\(key: Mod:Key) -> (Mod:Key {maintainers} key));
-          };
-
-          // checks that the FailedPrecondition error thrown when creating a FailingPrecondition instance can be caught
-          val createFailingPreconditionAndCatchError: Update Unit =
-            try @Unit
-              ubind _:(ContractId Mod:FailingPrecondition) <-
-                  create @Mod:FailingPrecondition (Mod:FailingPrecondition { p = Mod:alice })
-              in upure @Unit ()
-            catch
-              e -> Some @(Update Unit) (upure @Unit ());
-
-          // Tries to catch the error throw by the ensure clause of FailingPrecondition when exercising a choice on it,
-          // should fail to do so.
-          val exerciseFailingPreconditionAndCatchError: (ContractId Mod:FailingPrecondition) -> Update Text =
-            \(cid: ContractId Mod:FailingPrecondition) ->
-              try @Text
-                exercise @Mod:FailingPrecondition SomeChoice cid ()
-              catch
-                e -> Some @(Update Text) (upure @Text "unexpected: some exception was caught");
-
-          // Tries to catch the error throw by the ensure clause of a FailingPrecondition contract when fetching it,
-          // should fail to do so.
-          val fetchFailingPreconditionAndCatchError: (ContractId Mod:FailingPrecondition) -> Update Text =
-            \(cid: ContractId Mod:FailingPrecondition) ->
-              try @Text
-                ubind _:Mod:FailingPrecondition <- fetch_template @Mod:FailingPrecondition cid
-                in upure @Text "unexpected: contract was fetched"
-              catch
-                e -> Some @(Update Text) (upure @Text "unexpected: some exception was caught");
-
-          // Tries to catch the error throw by the ensure clause of a FailingPrecondition contract when fetching it by
-          // interface, should fail to do so.
-          val fetchFailingPreconditionByInterfaceAndCatchError: (ContractId Mod:FailingPrecondition) -> Update Text =
-            \(cid: ContractId Mod:FailingPrecondition) ->
-              try @Text
-                ubind _:Mod:Iface <-
-                    fetch_interface @Mod:Iface (COERCE_CONTRACT_ID @Mod:FailingPrecondition @Mod:Iface cid)
-                in upure @Text "unexpected: contract was fetched by interface"
-              catch
-                e -> Some @(Update Text) (upure @Text "unexpected: some exception was caught");
-
-          // Tries to catch the error throw by the ensure clause of a FailingPrecondition contract when fetching it by
-          // key, should fail to do so.
-          val fetchFailingPreconditionByKeyAndCatchError: Mod:Key -> Update Text =
-            \(key: Mod:Key) ->
-              try @Text
-                ubind _:<contract: Mod:FailingPrecondition, contractId: ContractId Mod:FailingPrecondition> <-
-                    fetch_by_key @Mod:FailingPrecondition key
-                in upure @Text "unexpected: contract was fetched by key"
-              catch
-                e -> Some @(Update Text) (upure @Text "unexpected: some exception was caught");
-
-          // Tries to catch the error throw by the ensure clause of a FailingPrecondition contract when looking it up by
-          // key, should fail to do so.
-          val lookUpFailingPreconditionByKeyAndCatchError: Mod:Key -> Update Text =
-            \(key: Mod:Key) ->
-              try @Text
-                ubind _:Option (ContractId Mod:FailingPrecondition) <-
-                    lookup_by_key @Mod:FailingPrecondition key
-                in upure @Text "unexpected: contract was looked up by key"
-              catch
-                e -> Some @(Update Text) (upure @Text "unexpected: some exception was caught");
+          ${failingContractId(
+        componentName = "Agreement",
+        precondition = """True""",
+        signatories = """Cons @Party [Mod:FailingAgreement {p} this] (Nil @Party)""",
+        observers = """Nil @Party""",
+        agreement = """throw @Text @Mod:Ex1 (Mod:Ex1 {message = "failed Agreement"})""",
+      )}
         }
     """
 

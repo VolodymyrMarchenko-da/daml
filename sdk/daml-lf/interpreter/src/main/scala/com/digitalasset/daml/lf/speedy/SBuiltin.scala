@@ -961,7 +961,7 @@ private[lf] object SBuiltin {
         templateId,
         templateArg,
         keyOpt,
-        enableEnsureClauseErrorsCatching = true,
+        allowCatchingContractInfoErrors = true,
       ) { contract =>
         contract.keyOpt match {
           case Some(contractKey) if contractKey.maintainers.isEmpty =>
@@ -1029,7 +1029,7 @@ private[lf] object SBuiltin {
         templateId,
         templateArg,
         keyOpt,
-        enableEnsureClauseErrorsCatching = false,
+        allowCatchingContractInfoErrors = false,
       ) { contract =>
         val templateVersion = machine.tmplId2TxVersion(templateId)
         val pkgName = machine.tmplId2PackageName(templateId, templateVersion)
@@ -1229,7 +1229,7 @@ private[lf] object SBuiltin {
         dstTplId,
         dstArg,
         SValue.SValue.None,
-        enableEnsureClauseErrorsCatching = false,
+        allowCatchingContractInfoErrors = false,
       ) { _ =>
         k(SAny(Ast.TTyCon(dstTplId), dstArg))
       }
@@ -1629,7 +1629,7 @@ private[lf] object SBuiltin {
           templateId,
           templateArg,
           keyOpt,
-          enableEnsureClauseErrorsCatching = false,
+          allowCatchingContractInfoErrors = false,
         ) { contract =>
           val version = machine.tmplId2TxVersion(templateId)
           machine.ptx.insertFetch(
@@ -1772,7 +1772,7 @@ private[lf] object SBuiltin {
                       templateId,
                       templateArg,
                       keyOpt,
-                      enableEnsureClauseErrorsCatching = false,
+                      allowCatchingContractInfoErrors = false,
                     ) { contract =>
                       machine.checkKeyVisibility(gkey, coid, operation.handleKeyFound, contract)
                     }
@@ -1797,7 +1797,7 @@ private[lf] object SBuiltin {
                           templateId,
                           templateArg,
                           keyOpt,
-                          enableEnsureClauseErrorsCatching = false,
+                          allowCatchingContractInfoErrors = false,
                         ) { contract =>
                           machine.checkKeyVisibility(
                             gkey,
@@ -2419,7 +2419,7 @@ private[lf] object SBuiltin {
             templateId,
             templateArg,
             keyOpt,
-            enableEnsureClauseErrorsCatching = false,
+            allowCatchingContractInfoErrors = false,
           ) { contract =>
             f(contract.packageName, SValue.SAnyContract(templateId, templateArg))
           }
@@ -2448,7 +2448,7 @@ private[lf] object SBuiltin {
                   dstTmplId,
                   templateArg,
                   keyOpt,
-                  enableEnsureClauseErrorsCatching = false,
+                  allowCatchingContractInfoErrors = false,
                 ) { contract =>
                   ensureContractActive(machine, coid, contract.templateId) {
 
@@ -2541,7 +2541,7 @@ private[lf] object SBuiltin {
       templateId: Identifier,
       templateArg: SValue,
       keyOpt: SValue,
-      enableEnsureClauseErrorsCatching: Boolean,
+      allowCatchingContractInfoErrors: Boolean,
   )(f: ContractInfo => Control[Question.Update]): Control[Question.Update] = {
     machine.contractInfoCache.get((coid, templateId.packageId)) match {
       case Some(contract) =>
@@ -2554,7 +2554,7 @@ private[lf] object SBuiltin {
           templateId,
           templateArg,
           keyOpt,
-          enableEnsureClauseErrorsCatching,
+          allowCatchingContractInfoErrors,
         ) { contract =>
           machine.insertContractInfoCache(coid, contract)
           f(contract)
@@ -2567,7 +2567,7 @@ private[lf] object SBuiltin {
       templateId: Identifier,
       templateArg: SValue,
       keyOpt: SValue,
-      enableEnsureClauseErrorsCatching: Boolean,
+      allowCatchingContractInfoErrors: Boolean,
   )(f: ContractInfo => Control[Q]): Control[Q] = {
     val contractInfoDef = SEVal(ToContractInfoDefRef(templateId))
     val e: SExpr = SEApp(
@@ -2577,7 +2577,7 @@ private[lf] object SBuiltin {
         keyOpt,
       ),
     )
-    executeExpression(machine, if (enableEnsureClauseErrorsCatching) e else SEPreventCatch(e)) {
+    executeExpression(machine, if (allowCatchingContractInfoErrors) e else SEPreventCatch(e)) {
       contractInfoStruct =>
         val contract = extractContractInfo(
           machine.tmplId2TxVersion,
