@@ -28,14 +28,17 @@ import com.digitalasset.canton.metrics.{CantonHistograms, MetricsRegistry}
 import com.digitalasset.canton.networking.grpc.CantonGrpcUtil
 import com.digitalasset.canton.participant.*
 import com.digitalasset.canton.participant.config.LocalParticipantConfig
-import com.digitalasset.canton.resource.DbMigrationsFactory
+import com.digitalasset.canton.resource.DbMigrationsMetaFactory
 import com.digitalasset.canton.synchronizer.mediator.{
   MediatorNodeBootstrap,
+  MediatorNodeBootstrapFactory,
   MediatorNodeConfig,
-  MediatorNodeParameters,
 }
-import com.digitalasset.canton.synchronizer.metrics.MediatorMetrics
-import com.digitalasset.canton.synchronizer.sequencer.SequencerNodeBootstrap
+import com.digitalasset.canton.synchronizer.sequencer.config.SequencerNodeConfig
+import com.digitalasset.canton.synchronizer.sequencer.{
+  SequencerNodeBootstrap,
+  SequencerNodeBootstrapFactory,
+}
 import com.digitalasset.canton.telemetry.{ConfiguredOpenTelemetry, OpenTelemetryFactory}
 import com.digitalasset.canton.time.*
 import com.digitalasset.canton.tracing.TraceContext.withNewTraceContext
@@ -44,6 +47,7 @@ import com.digitalasset.canton.util.FutureInstances.parallelFuture
 import com.digitalasset.canton.util.{MonadUtil, PekkoUtil, SingleUseCell}
 import com.google.common.annotations.VisibleForTesting
 import io.circe.Encoder
+import io.circe.generic.semiauto.deriveEncoder
 import org.apache.pekko.actor.ActorSystem
 import org.slf4j.bridge.SLF4JBridgeHandler
 
@@ -55,15 +59,18 @@ import scala.util.control.NonFatal
 
 /** Holds all significant resources held by this process.
   */
-trait Environment extends NamedLogging with AutoCloseable with NoTracing {
-
-  type Config <: CantonConfig & ConfigDefaults[DefaultPorts, Config]
-  type Console <: ConsoleEnvironment
-
-  val config: Config
-  val testingConfig: TestingConfigInternal
-
-  val loggerFactory: NamedLoggerFactory
+class Environment(
+    val config: CantonConfig,
+    edition: CantonEdition,
+    val testingConfig: TestingConfigInternal,
+    participantNodeFactory: ParticipantNodeBootstrapFactory,
+    sequencerNodeFactory: SequencerNodeBootstrapFactory,
+    mediatorNodeFactory: MediatorNodeBootstrapFactory,
+    migrationsFactoryFactory: DbMigrationsMetaFactory,
+    override val loggerFactory: NamedLoggerFactory,
+) extends NamedLogging
+    with AutoCloseable
+    with NoTracing {
 
   implicit val scheduler: ScheduledExecutorService =
     Threading.singleThreadScheduledExecutor(
@@ -106,25 +113,18 @@ trait Environment extends NamedLogging with AutoCloseable with NoTracing {
     loggerFactory,
   )
 
-  protected def participantNodeFactory
-      : ParticipantNodeBootstrap.Factory[LocalParticipantConfig, ParticipantNodeBootstrap]
-  protected def migrationsFactory: DbMigrationsFactory
-
-  def isEnterprise: Boolean
+  def isEnterprise: Boolean = edition == EnterpriseCantonEdition
 
   def createConsole(
       consoleOutput: ConsoleOutput = StandardConsoleOutput
-  ): Console = {
-    val console = _createConsole(consoleOutput)
+  ): ConsoleEnvironment = {
+    val console =
+      new ConsoleEnvironment(this, consoleOutput)
     healthDumpGenerator
       .putIfAbsent(createHealthDumpGenerator(console.grpcAdminCommandRunner))
       .discard
     console
   }
-
-  protected def _createConsole(
-      consoleOutput: ConsoleOutput = StandardConsoleOutput
-  ): Console
 
   @VisibleForTesting
   protected def createHealthDumpGenerator(
@@ -268,7 +268,7 @@ trait Environment extends NamedLogging with AutoCloseable with NoTracing {
   lazy val participants =
     new ParticipantNodes[ParticipantNodeBootstrap, ParticipantNode](
       createParticipant,
-      migrationsFactory,
+      migrationsFactoryFactory.create(clock),
       timeouts,
       config.participantsByString,
       config.participantNodeParametersByString,
@@ -278,7 +278,7 @@ trait Environment extends NamedLogging with AutoCloseable with NoTracing {
 
   val sequencers = new SequencerNodes(
     createSequencer,
-    migrationsFactory,
+    migrationsFactoryFactory.create(clock),
     timeouts,
     config.sequencersByString,
     config.sequencerNodeParametersByString,
@@ -288,7 +288,7 @@ trait Environment extends NamedLogging with AutoCloseable with NoTracing {
   val mediators =
     new MediatorNodes(
       createMediator,
-      migrationsFactory,
+      migrationsFactoryFactory.create(clock),
       timeouts,
       config.mediatorsByString,
       config.mediatorNodeParametersByString,
@@ -299,29 +299,31 @@ trait Environment extends NamedLogging with AutoCloseable with NoTracing {
   // intentionally defined in the order we'd like to start them
   protected def allNodes: List[Nodes[CantonNode, CantonNodeBootstrap[CantonNode]]] =
     List(sequencers, mediators, participants)
+
   private def runningNodes: Seq[CantonNodeBootstrap[CantonNode]] = allNodes.flatMap(_.running)
 
   /** Try to startup all nodes in the configured environment and reconnect them to one another. The
     * first error will prevent further nodes from being started. If an error is returned previously
     * started nodes will not be stopped.
     */
-  def startAndReconnect(): Either[StartupError, Unit] =
+  def startAndReconnect(runner: => Unit = ()): Either[StartupError, Unit] =
     withNewTraceContext { implicit traceContext =>
       if (config.parameters.manualStart) {
         logger.info("Manual start requested.")
-        Either.unit
+        Right(runner)
       } else {
         logger.info("Automatically starting all instances")
         val startup = for {
           _ <- startAll()
           _ <- reconnectParticipants
-        } yield writePortsFile()
+        } yield {
+          logger.info("Successfully started all nodes")
+          runner
+          writePortsFile()
+        } // write ports after the runner has completed
         // log results
         startup
-          .bimap(
-            error => logger.error(s"Failed to start ${error.name}: ${error.message}"),
-            _ => logger.info("Successfully started all nodes"),
-          )
+          .leftMap(error => logger.error(s"Failed to start ${error.name}: ${error.message}"))
           .discard
         startup
       }
@@ -331,19 +333,20 @@ trait Environment extends NamedLogging with AutoCloseable with NoTracing {
   private[canton] def writePortsFile()(implicit
       traceContext: TraceContext
   ): Unit = {
-    final case class ParticipantApis(ledgerApi: Int, adminApi: Int)
+    final case class ParticipantApis(ledgerApi: Int, adminApi: Int, jsonApi: Option[Int])
     config.parameters.portsFile.foreach { portsFile =>
       val items = participants.running.map { node =>
         (
           node.name.unwrap,
-          ParticipantApis(node.config.ledgerApi.port.unwrap, node.config.adminApi.port.unwrap),
+          ParticipantApis(
+            ledgerApi = node.config.ledgerApi.port.unwrap,
+            adminApi = node.config.adminApi.port.unwrap,
+            jsonApi = node.config.httpLedgerApi.flatMap(_.server.port),
+          ),
         )
       }.toMap
       import io.circe.syntax.*
-      implicit val encoder: Encoder[ParticipantApis] =
-        Encoder.forProduct2("ledgerApi", "adminApi") { apis =>
-          (apis.ledgerApi, apis.adminApi)
-        }
+      implicit val encoder: Encoder[ParticipantApis] = deriveEncoder
       val out = items.asJson.spaces2
       try {
         better.files.File(portsFile).overwrite(out)
@@ -455,13 +458,50 @@ trait Environment extends NamedLogging with AutoCloseable with NoTracing {
 
   protected def createSequencer(
       name: String,
-      sequencerConfig: Config#SequencerNodeConfigType,
-  ): SequencerNodeBootstrap
+      sequencerConfig: SequencerNodeConfig,
+  ): SequencerNodeBootstrap =
+    sequencerNodeFactory
+      .create(
+        NodeFactoryArguments(
+          name,
+          sequencerConfig,
+          config.sequencerNodeParametersByString(name),
+          createClock(Some(SequencerNodeBootstrap.LoggerFactoryKeyName -> name)),
+          metricsRegistry.forSequencer(name),
+          testingConfig,
+          futureSupervisor,
+          loggerFactory.append(SequencerNodeBootstrap.LoggerFactoryKeyName, name),
+          writeHealthDumpToFile,
+          configuredOpenTelemetry,
+          executionContext,
+        )
+      )
+      .valueOr(err =>
+        throw new RuntimeException(s"Failed to create sequencer node $name: $err")
+      ) // TODO(i3168): Handle node startup errors gracefully
 
   protected def createMediator(
       name: String,
       mediatorConfig: MediatorNodeConfig,
-  ): MediatorNodeBootstrap
+  ): MediatorNodeBootstrap = mediatorNodeFactory
+    .create(
+      NodeFactoryArguments(
+        name,
+        mediatorConfig,
+        config.mediatorNodeParametersByString(name),
+        createClock(Some(MediatorNodeBootstrap.LoggerFactoryKeyName -> name)),
+        metricsRegistry.forMediator(name),
+        testingConfig,
+        futureSupervisor,
+        loggerFactory.append(MediatorNodeBootstrap.LoggerFactoryKeyName, name),
+        writeHealthDumpToFile,
+        configuredOpenTelemetry,
+        executionContext,
+      )
+    )
+    .valueOr(err =>
+      throw new RuntimeException(s"Failed to create mediator node $name: $err")
+    ) // TODO(i3168): Handle node startup errors gracefully
 
   protected def createParticipant(
       name: String,
@@ -486,24 +526,6 @@ trait Environment extends NamedLogging with AutoCloseable with NoTracing {
         testingTimeService,
       )
       .valueOr(err => throw new RuntimeException(s"Failed to create participant bootstrap: $err"))
-
-  protected def mediatorNodeFactoryArguments(
-      name: String,
-      mediatorConfig: MediatorNodeConfig,
-  ): NodeFactoryArguments[MediatorNodeConfig, MediatorNodeParameters, MediatorMetrics] =
-    NodeFactoryArguments(
-      name,
-      mediatorConfig,
-      config.mediatorNodeParametersByString(name),
-      createClock(Some(MediatorNodeBootstrap.LoggerFactoryKeyName -> name)),
-      metricsRegistry.forMediator(name),
-      testingConfig,
-      futureSupervisor,
-      loggerFactory.append(MediatorNodeBootstrap.LoggerFactoryKeyName, name),
-      writeHealthDumpToFile,
-      configuredOpenTelemetry,
-      executionContext,
-    )
 
   private def simClocks: Seq[SimClock] = {
     val clocks = clock +: (participants.running.map(_.clock) ++ sequencers.running.map(
@@ -555,10 +577,10 @@ object Environment {
 
 }
 
-trait EnvironmentFactory[E <: Environment] {
+trait EnvironmentFactory {
   def create(
-      config: E#Config,
+      config: CantonConfig,
       loggerFactory: NamedLoggerFactory,
       testingConfigInternal: TestingConfigInternal = TestingConfigInternal(),
-  ): E
+  ): Environment
 }

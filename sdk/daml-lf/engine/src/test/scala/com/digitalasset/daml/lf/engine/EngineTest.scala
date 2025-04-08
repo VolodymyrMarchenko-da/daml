@@ -59,6 +59,7 @@ import scala.annotation.nowarn
 import scala.collection.immutable.HashMap
 import scala.language.implicitConversions
 import scala.math.Ordered.orderingToOrdered
+import com.digitalasset.daml.lf.interpretation.{Error => IE}
 
 class EngineTestV2 extends EngineTest(LanguageMajorVersion.V2)
 
@@ -153,6 +154,127 @@ class EngineTest(majorLanguageVersion: LanguageMajorVersion)
       interpretResult.map { case (tx, _) => byKeyNodes(tx).size } shouldBe Right(0)
     }
 
+  }
+
+  "command with disclosure" should {
+    "reject disclosures with non-normalized numeric values" in {
+      val templateId = Identifier(basicTestsPkgId, "BasicTests:SimpleNumeric")
+      val cid = toContractId("BasicTests:SimpleNumeric:1")
+      val command =
+        ApiCommand.Exercise(
+          templateId.toRef,
+          cid,
+          "HelloNumeric",
+          ValueRecord(Some(Identifier(basicTestsPkgId, "BasicTests:HelloNumeric")), ImmArray.Empty),
+        )
+      val readAs = (Set.empty: Set[Party])
+
+      val res = preprocessor
+        .preprocessApiCommands(Map.empty, ImmArray(command))
+        .consume(Map.empty, lookupPackage, Map.empty)
+      res shouldBe a[Right[_, _]]
+
+      val disclosure =
+        FatContractInstance.fromCreateNode(
+          Node.Create(
+            coid = cid,
+            packageName = basicTestsPkg.pkgName,
+            templateId = templateId,
+            arg = ValueRecord(
+              Some(templateId),
+              ImmArray(
+                Some[Name]("p") -> ValueParty(party),
+                // The static type of "num" is Numeric 4 but the value below only has 2 decimal places. Because
+                // numeric values in disclosures must be normalized, we expect this to disclosure to be rejected
+                // by the engine in SBImportInputContract with a conformance error.
+                Some[Name]("num") -> ValueNumeric(Numeric.assertFromString("12.12")),
+              ),
+            ),
+            signatories = Set(party),
+            stakeholders = Set(party),
+            keyOpt = None,
+            version = basicTestsPkg.languageVersion,
+          ),
+          Time.Timestamp.now(),
+          Bytes.Empty,
+        )
+
+      val result = suffixLenientEngine
+        .submit(
+          submitters = Set(party),
+          readAs = readAs,
+          cmds = ApiCommands(ImmArray(command), Time.Timestamp.now(), "test"),
+          disclosures = ImmArray(disclosure),
+          participantId = participant,
+          submissionSeed = hash("exercise command with disclosure"),
+          prefetchKeys = Seq.empty,
+        )
+        .consume(Map.empty, lookupPackage, Map.empty)
+
+      inside(result) { case Left(Error.Interpretation(DamlException(IE.Dev(_, err)), _)) =>
+        err shouldBe a[IE.Dev.Conformance]
+      }
+    }
+
+    "accept disclosures with trailing nones" in {
+      val templateId = Identifier(basicTestsPkgId, "BasicTests:SimpleTrailingNone")
+      val cid = toContractId("BasicTests:SimpleTrailingNone:1")
+      val command =
+        ApiCommand.Exercise(
+          templateId.toRef,
+          cid,
+          "HelloTrailingNone",
+          ValueRecord(
+            Some(Identifier(basicTestsPkgId, "BasicTests:HelloTrailingNone")),
+            ImmArray.Empty,
+          ),
+        )
+      val readAs = (Set.empty: Set[Party])
+
+      val res = preprocessor
+        .preprocessApiCommands(Map.empty, ImmArray(command))
+        .consume(Map.empty, lookupPackage, Map.empty)
+      res shouldBe a[Right[_, _]]
+
+      val disclosure =
+        FatContractInstance.fromCreateNode(
+          Node.Create(
+            coid = cid,
+            packageName = basicTestsPkg.pkgName,
+            templateId = templateId,
+            arg = ValueRecord(
+              Some(templateId),
+              ImmArray(
+                Some[Name]("p") -> ValueParty(party),
+                // The engine will always produce transactions with no trailing Nones. But for backwards compatibility
+                // with version of Canton predating 3.3, SBImportInputContract should not reject disclosures with
+                // trailing Nones.
+                Some[Name]("opt") -> ValueOptional(None),
+              ),
+            ),
+            signatories = Set(party),
+            stakeholders = Set(party),
+            keyOpt = None,
+            version = basicTestsPkg.languageVersion,
+          ),
+          Time.Timestamp.now(),
+          Bytes.Empty,
+        )
+
+      val result = suffixLenientEngine
+        .submit(
+          submitters = Set(party),
+          readAs = readAs,
+          cmds = ApiCommands(ImmArray(command), Time.Timestamp.now(), "test"),
+          disclosures = ImmArray(disclosure),
+          participantId = participant,
+          submissionSeed = hash("exercise command with disclosure"),
+          prefetchKeys = Seq.empty,
+        )
+        .consume(Map.empty, lookupPackage, Map.empty)
+
+      result shouldBe a[Right[_, _]]
+    }
   }
 
   "multi-party create command" should {
@@ -1302,7 +1424,6 @@ class EngineTest(majorLanguageVersion: LanguageMajorVersion)
       assertAsVersionedContract(
         ContractInstance(
           packageName = basicTestsPkg.pkgName,
-          packageVersion = basicTestsPkg.pkgVersion,
           template = TypeConName(basicTestsPkgId, tid),
           arg = ValueRecord(Some(Identifier(basicTestsPkgId, tid)), targs),
         )
@@ -1446,7 +1567,6 @@ class EngineTest(majorLanguageVersion: LanguageMajorVersion)
       assertAsVersionedContract(
         ContractInstance(
           packageName = basicTestsPkg.pkgName,
-          packageVersion = basicTestsPkg.pkgVersion,
           template = TypeConName(basicTestsPkgId, fetchedStrTid),
           arg = ValueRecord(
             Some(Identifier(basicTestsPkgId, fetchedStrTid)),
@@ -1495,7 +1615,6 @@ class EngineTest(majorLanguageVersion: LanguageMajorVersion)
       assertAsVersionedContract(
         ContractInstance(
           packageName = basicTestsPkg.pkgName,
-          packageVersion = basicTestsPkg.pkgVersion,
           template = TypeConName(basicTestsPkgId, lookerUpTemplate),
           arg =
             ValueRecord(Some(lookerUpTemplateId), ImmArray((Some[Name]("p"), ValueParty(alice)))),
@@ -1843,7 +1962,6 @@ class EngineTest(majorLanguageVersion: LanguageMajorVersion)
       val fetcherInst = assertAsVersionedContract(
         ContractInstance(
           packageName = basicTestsPkg.pkgName,
-          packageVersion = basicTestsPkg.pkgVersion,
           template = TypeConName(basicTestsPkgId, fetcherTemplate),
           arg = ValueRecord(Some(fetcherTemplateId), ImmArray((Some[Name]("p"), ValueParty(alice)))),
         )
@@ -1913,7 +2031,6 @@ class EngineTest(majorLanguageVersion: LanguageMajorVersion)
     val fetcherInst = assertAsVersionedContract(
       ContractInstance(
         packageName = basicTestsPkg.pkgName,
-        packageVersion = basicTestsPkg.pkgVersion,
         template = fetcherId,
         arg = ValueRecord(
           None,
@@ -2094,7 +2211,6 @@ class EngineTest(majorLanguageVersion: LanguageMajorVersion)
       cid -> assertAsVersionedContract(
         ContractInstance(
           packageName = exceptionsPkg.pkgName,
-          packageVersion = exceptionsPkg.pkgVersion,
           template = TypeConName(exceptionsPkgId, "Exceptions:K"),
           arg = ValueRecord(
             None,
@@ -2246,7 +2362,6 @@ class EngineTest(majorLanguageVersion: LanguageMajorVersion)
       cid -> assertAsVersionedContract(
         ContractInstance(
           packageName = exceptionsPkg.pkgName,
-          packageVersion = exceptionsPkg.pkgVersion,
           template = TypeConName(exceptionsPkgId, "Exceptions:K"),
           arg = ValueRecord(
             None,
@@ -2326,7 +2441,6 @@ class EngineTest(majorLanguageVersion: LanguageMajorVersion)
       cid -> assertAsVersionedContract(
         ContractInstance(
           packageName = exceptionsPkg.pkgName,
-          packageVersion = exceptionsPkg.pkgVersion,
           template = TypeConName(exceptionsPkgId, "Exceptions:K"),
           arg = ValueRecord(
             None,
@@ -2424,7 +2538,14 @@ class EngineTest(majorLanguageVersion: LanguageMajorVersion)
       s"daml-lf/engine/BasicTests-v${majorLanguageVersion.pretty}dev.dar"
     )
     val compatibleLanguageVersions = LanguageVersion.AllV2
-    val stablePackages = StablePackages(majorLanguageVersion).allPackages
+    // Following stable packages are deps of other stable packages, so we sort such that these are preloaded first
+    val stablePackagesToLoadFirst = List("daml-prim-DA-Types", "daml-stdlib-DA-NonEmpty-Types")
+    val stablePackages =
+      StablePackages(majorLanguageVersion).allPackages
+        .sortBy { sp =>
+          val i = stablePackagesToLoadFirst.indexOf(sp.name)
+          if (i == -1) Int.MaxValue else i
+        }
 
     s"accept stable packages from ${devVersion} even if version is smaller than min version" in {
       for {
@@ -2548,7 +2669,6 @@ class EngineTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
     assertAsVersionedContract(
       ContractInstance(
         packageName = basicTestsPkg.pkgName,
-        packageVersion = basicTestsPkg.pkgVersion,
         template = TypeConName(basicTestsPkgId, withKeyTemplate),
         arg = ValueRecord(
           Some(BasicTests_WithKey),
@@ -2566,7 +2686,6 @@ class EngineTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
         assertAsVersionedContract(
           ContractInstance(
             packageName = basicTestsPkg.pkgName,
-            packageVersion = basicTestsPkg.pkgVersion,
             template = TypeConName(basicTestsPkgId, "BasicTests:Simple"),
             arg = ValueRecord(
               Some(Identifier(basicTestsPkgId, "BasicTests:Simple")),
@@ -2578,7 +2697,6 @@ class EngineTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
         assertAsVersionedContract(
           ContractInstance(
             packageName = basicTestsPkg.pkgName,
-            packageVersion = basicTestsPkg.pkgVersion,
             template = TypeConName(basicTestsPkgId, "BasicTests:CallablePayout"),
             arg = ValueRecord(
               Some(Identifier(basicTestsPkgId, "BasicTests:CallablePayout")),
@@ -2736,7 +2854,7 @@ class EngineTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
           submissionSeed = None,
           submissionTime = txMeta.submissionTime,
           usedPackages = Set.empty,
-          dependsOnTime = state.dependsOnTime,
+          timeBoundaries = state.timeBoundaries,
           nodeSeeds = state.nodeSeeds.toImmArray,
           globalKeyMapping = Map.empty,
           disclosedEvents = ImmArray.empty,
@@ -2820,7 +2938,7 @@ class EngineTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
       keys: Map[GlobalKeyWithMaintainers, ContractId],
       nodes: HashMap[NodeId, Node] = HashMap.empty,
       roots: BackStack[NodeId] = BackStack.empty,
-      dependsOnTime: Boolean = false,
+      timeBoundaries: Time.Range = Time.Range.unconstrained,
       nodeSeeds: BackStack[(NodeId, crypto.Hash)] = BackStack.empty,
   ) {
     def commit(tr: Tx, meta: Tx.Metadata): ReinterpretState = {
@@ -2837,12 +2955,15 @@ class EngineTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
           )
         case (acc, _) => acc
       }
+      val timeBoundaries: Time.Range =
+        meta.timeBoundaries intersect this.timeBoundaries
+
       ReinterpretState(
         newContracts,
         newKeys,
         nodes ++ tr.nodes,
         roots :++ tr.roots,
-        dependsOnTime || meta.dependsOnTime,
+        timeBoundaries,
         nodeSeeds :++ meta.nodeSeeds,
       )
     }
@@ -2862,7 +2983,6 @@ class EngineTestHelpers(majorLanguageVersion: LanguageMajorVersion) {
         Node.Create(
           coid = coid,
           packageName = pkg.pkgName,
-          packageVersion = pkg.pkgVersion,
           templateId = templateId,
           arg = arg.toNormalizedValue(version),
           signatories = Set(signatory),

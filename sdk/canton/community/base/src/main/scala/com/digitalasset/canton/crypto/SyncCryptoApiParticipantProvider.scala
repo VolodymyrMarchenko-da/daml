@@ -59,7 +59,7 @@ class SyncCryptoApiParticipantProvider(
     val ips: IdentityProvidingServiceClient,
     val crypto: Crypto,
     sessionSigningKeysConfig: SessionSigningKeysConfig,
-    verificationParallelismLimit: Int,
+    verificationParallelismLimit: PositiveInt,
     timeouts: ProcessingTimeout,
     futureSupervisor: FutureSupervisor,
     loggerFactory: NamedLoggerFactory,
@@ -371,6 +371,10 @@ class SynchronizerCryptoClient private (
   ): Option[FutureUnlessShutdown[Unit]] =
     ips.awaitTimestamp(timestamp)
 
+  override def awaitSequencedTimestamp(timestampInclusive: SequencedTime)(implicit
+      traceContext: TraceContext
+  ): Option[FutureUnlessShutdown[Unit]] = ips.awaitSequencedTimestamp(timestampInclusive)
+
   override def currentSnapshotApproximation(implicit
       traceContext: TraceContext
   ): SynchronizerSnapshotSyncCryptoApi =
@@ -383,7 +387,7 @@ class SynchronizerCryptoClient private (
   override def onClosed(): Unit =
     LifeCycle.close(ips)(logger)
 
-  override def awaitMaxTimestamp(sequencedTime: CantonTimestamp)(implicit
+  override def awaitMaxTimestamp(sequencedTime: SequencedTime)(implicit
       traceContext: TraceContext
   ): FutureUnlessShutdown[Option[(SequencedTime, EffectiveTime)]] =
     ips.awaitMaxTimestamp(sequencedTime)
@@ -398,18 +402,19 @@ object SynchronizerCryptoClient {
       staticSynchronizerParameters: StaticSynchronizerParameters,
       crypto: Crypto,
       pureCrypto: SynchronizerCryptoPureApi,
-      verificationParallelismLimit: Int,
+      verificationParallelismLimit: PositiveInt,
       timeouts: ProcessingTimeout,
       futureSupervisor: FutureSupervisor,
       loggerFactory: NamedLoggerFactory,
   )(implicit
       executionContext: ExecutionContext
   ): SynchronizerCryptoClient = {
-    val syncCryptoSignerDefault = SyncCryptoSigner.create(
+    val syncCryptoSignerWithLongTermKeys = SyncCryptoSigner.createWithLongTermKeys(
+      synchronizerId,
       staticSynchronizerParameters,
       member,
-      pureCrypto,
       crypto.privateCrypto,
+      pureCrypto,
       crypto.cryptoPrivateStore,
       verificationParallelismLimit,
       loggerFactory,
@@ -419,7 +424,7 @@ object SynchronizerCryptoClient {
       synchronizerId,
       ips,
       crypto,
-      syncCryptoSignerDefault,
+      syncCryptoSignerWithLongTermKeys,
       staticSynchronizerParameters,
       timeouts,
       futureSupervisor,
@@ -438,7 +443,7 @@ object SynchronizerCryptoClient {
       crypto: Crypto,
       pureCrypto: SynchronizerCryptoPureApi,
       sessionSigningKeysConfig: SessionSigningKeysConfig,
-      verificationParallelismLimit: Int,
+      verificationParallelismLimit: PositiveInt,
       timeouts: ProcessingTimeout,
       futureSupervisor: FutureSupervisor,
       loggerFactory: NamedLoggerFactory,
@@ -446,10 +451,11 @@ object SynchronizerCryptoClient {
       executionContext: ExecutionContext
   ): SynchronizerCryptoClient = {
     val syncCryptoSignerWithSessionKeys = SyncCryptoSigner.createWithOptionalSessionKeys(
+      synchronizerId,
       staticSynchronizerParameters,
       member,
-      pureCrypto,
       crypto.privateCrypto,
+      pureCrypto,
       crypto.cryptoPrivateStore,
       sessionSigningKeysConfig,
       verificationParallelismLimit,

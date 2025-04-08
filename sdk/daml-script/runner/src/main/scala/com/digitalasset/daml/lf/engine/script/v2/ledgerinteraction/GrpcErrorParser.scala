@@ -4,6 +4,7 @@
 package com.digitalasset.daml.lf.engine.script.v2.ledgerinteraction
 
 import com.digitalasset.daml.lf.data.Ref._
+import com.digitalasset.daml.lf.interpretation.{Error => IE}
 import com.digitalasset.daml.lf.transaction.{
   GlobalKey,
   GlobalKeyWithMaintainers,
@@ -37,8 +38,8 @@ object GrpcErrorParser {
 
   // Converts a given SubmitError into a SubmitError. Wraps in an UnknownError if its not what we expect, wraps in a TruncatedError if we're missing resources
   def convertStatusRuntimeException(status: Status): SubmitError = {
-    import com.daml.error.utils.ErrorDetails._
-    import com.daml.error.ErrorResource
+    import com.digitalasset.base.error.utils.ErrorDetails._
+    import com.digitalasset.base.error.ErrorResource
 
     val details = from(status.details.map(Any.toJavaProto))
     val message = status.message
@@ -92,6 +93,10 @@ object GrpcErrorParser {
                 ),
               None,
             )
+        }
+      case "UNRESOLVED_PACKAGE_NAME" =>
+        caseErr { case Seq((ErrorResource.PackageName, pkgName)) =>
+          SubmitError.UnresolvedPackageName(PackageName.assertFromString(pkgName))
         }
       case "CONTRACT_KEY_NOT_FOUND" =>
         caseErr {
@@ -315,22 +320,6 @@ object GrpcErrorParser {
               message,
             )
         }
-      case "INTERPRETATION_UPGRADE_ERROR_VIEW_MISMATCH" =>
-        caseErr {
-          case Seq(
-                (ErrorResource.ContractId, coid),
-                (ErrorResource.InterfaceId, iterfaceId),
-                (ErrorResource.TemplateId, srcTemplateId),
-                (ErrorResource.TemplateId, dstTemplateId),
-              ) =>
-            SubmitError.UpgradeError.ViewMismatch(
-              ContractId.assertFromString(coid),
-              Identifier.assertFromString(iterfaceId),
-              Identifier.assertFromString(srcTemplateId),
-              Identifier.assertFromString(dstTemplateId),
-              message,
-            )
-        }
 
       case "INTERPRETATION_UPGRADE_ERROR_DOWNGRADE_FAILED" =>
         caseErr {
@@ -339,6 +328,37 @@ object GrpcErrorParser {
               ) =>
             SubmitError.UpgradeError.DowngradeFailed(expectedType, message)
         }
+
+      case "DAML_FAILURE" => {
+        // Fields added automatically by canton, and not by the user
+        // Removed in GrpcLedgerClient to be consistent with IDELedgerClient, which will not add these fields
+        val cantonFields =
+          Seq(
+            "commands",
+            "definite_answer",
+            "tid",
+            "category",
+            "participant",
+            "error_id",
+            "exercise_trace",
+          )
+        val oStatus =
+          for {
+            errorInfo <- oErrorInfoDetail
+            errorId <- errorInfo.metadata.get("error_id")
+            category <- errorInfo.metadata.get("category").map(_.toInt)
+            metadata = errorInfo.metadata.toMap.removedAll(cantonFields)
+            trace = errorInfo.metadata.get("exercise_trace")
+            // Drop prefix so we give back the exact message in the throwing daml code
+            messageWithoutPrefix <- "^.+?error category \\d+\\): (.*)$".r
+              .findFirstMatchIn(message)
+              .map(_.group(1))
+          } yield SubmitError.FailureStatusError(
+            IE.FailureStatus(errorId, category, messageWithoutPrefix, metadata),
+            trace,
+          )
+        oStatus.getOrElse(new SubmitError.TruncatedError("FailureStatusError", message))
+      }
 
       case "INTERPRETATION_DEV_ERROR" =>
         caseErr { case Seq((ErrorResource.DevErrorType, errorType)) =>

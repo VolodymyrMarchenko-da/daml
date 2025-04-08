@@ -266,6 +266,8 @@ object TransactionGenerator {
     contractId <- nonEmptyId
     (scalaTemplateId, javaTemplateId) <- identifierGen
     parties <- Gen.listOf(nonEmptyId)
+    implementedInterfaces <- Gen.listOf(identifierGen)
+    (scalaInterfaces, javaInterfaces) = implementedInterfaces.unzip
   } yield (
     Archived(
       ArchivedEvent(
@@ -275,6 +277,7 @@ object TransactionGenerator {
         templateId = Some(scalaTemplateId),
         witnessParties = parties,
         packageName = pkgName,
+        implementedInterfaces = scalaInterfaces,
       )
     ),
     new data.ArchivedEvent(
@@ -284,6 +287,7 @@ object TransactionGenerator {
       javaTemplateId,
       pkgName,
       contractId,
+      javaInterfaces.asJava,
     ),
   )
 
@@ -303,6 +307,8 @@ object TransactionGenerator {
     (scalaChildren, javaChildren) <- eventsGen
     witnessParties <- Gen.listOf(nonEmptyId)
     (scalaExerciseResult, javaExerciseResult) <- Gen.sized(valueGen)
+    implementedInterfaces <- Gen.listOf(identifierGen)
+    (scalaInterfaces, javaInterfaces) = implementedInterfaces.unzip
   } yield (
     Exercised(
       ExercisedEvent(
@@ -319,6 +325,7 @@ object TransactionGenerator {
         lastDescendantNodeId = nodeId,
         exerciseResult = Some(scalaExerciseResult),
         packageName = pkgName,
+        implementedInterfaces = scalaInterfaces,
       )
     ),
     new data.ExercisedEvent(
@@ -335,6 +342,7 @@ object TransactionGenerator {
       consuming,
       nodeId,
       javaExerciseResult,
+      javaInterfaces.asJava,
     ),
   )
 

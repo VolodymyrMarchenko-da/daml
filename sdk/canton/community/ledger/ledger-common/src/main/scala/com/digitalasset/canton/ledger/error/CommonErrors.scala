@@ -3,8 +3,15 @@
 
 package com.digitalasset.canton.ledger.error
 
-import com.daml.error.*
+import com.digitalasset.base.error.{
+  DamlErrorWithDefiniteAnswer,
+  ErrorCategory,
+  ErrorCode,
+  Explanation,
+  Resolution,
+}
 import com.digitalasset.canton.ledger.error.ParticipantErrorGroup.CommonErrorGroup
+import com.digitalasset.canton.logging.ContextualizedErrorLogger
 
 import scala.concurrent.duration.Duration
 

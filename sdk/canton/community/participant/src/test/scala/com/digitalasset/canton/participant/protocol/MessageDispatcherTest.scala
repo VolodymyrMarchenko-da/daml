@@ -111,7 +111,6 @@ trait MessageDispatcherTest {
       requestCounterAllocator: RequestCounterAllocator,
       recordOrderPublisher: RecordOrderPublisher,
       badRootHashMessagesRequestProcessor: BadRootHashMessagesRequestProcessor,
-      repairProcessor: RepairProcessor,
       inFlightSubmissionSynchronizerTracker: InFlightSubmissionSynchronizerTracker,
   )
 
@@ -129,7 +128,6 @@ trait MessageDispatcherTest {
             RequestCounterAllocator,
             RecordOrderPublisher,
             BadRootHashMessagesRequestProcessor,
-            RepairProcessor,
             InFlightSubmissionSynchronizerTracker,
             NamedLoggerFactory,
             ConnectedSynchronizerMetrics,
@@ -200,9 +198,24 @@ trait MessageDispatcherTest {
         new RequestCounterAllocatorImpl(initRc, cleanReplaySequencerCounter, loggerFactory)
       val recordOrderPublisher = mock[RecordOrderPublisher]
       when(
-        recordOrderPublisher.tick(any[SequencedUpdate])(any[TraceContext])
+        recordOrderPublisher.tick(
+          any[SequencedUpdate],
+          any[SequencerCounter],
+          any[Option[RequestCounter]],
+        )(
+          any[TraceContext]
+        )
       )
-        .thenAnswer(Future.unit)
+        .thenAnswer(FutureUnlessShutdown.unit)
+      when(
+        recordOrderPublisher.scheduleEmptyAcsChangePublication(
+          any[SequencerCounter],
+          any[CantonTimestamp],
+        )(
+          any[TraceContext]
+        )
+      )
+        .thenAnswer(UnlessShutdown.unit)
 
       val badRootHashMessagesRequestProcessor = mock[BadRootHashMessagesRequestProcessor]
       when(
@@ -214,8 +227,6 @@ trait MessageDispatcherTest {
         )(anyTraceContext)
       )
         .thenReturn(badRootHashMessagesRequestProcessorF)
-
-      val repairProcessor = mock[RepairProcessor]
 
       val inFlightSubmissionSynchronizerTracker = mock[InFlightSubmissionSynchronizerTracker]
       when(
@@ -255,7 +266,6 @@ trait MessageDispatcherTest {
         requestCounterAllocator,
         recordOrderPublisher,
         badRootHashMessagesRequestProcessor,
-        repairProcessor,
         inFlightSubmissionSynchronizerTracker,
         loggerFactory,
         connectedSynchronizerMetrics,
@@ -272,7 +282,6 @@ trait MessageDispatcherTest {
         requestCounterAllocator,
         recordOrderPublisher,
         badRootHashMessagesRequestProcessor,
-        repairProcessor,
         inFlightSubmissionSynchronizerTracker,
       )
     }
@@ -287,6 +296,7 @@ trait MessageDispatcherTest {
   ): Deliver[DefaultOpenEnvelope] =
     Deliver.create(
       sc,
+      None,
       ts,
       synchronizerId,
       messageId,
@@ -373,7 +383,6 @@ trait MessageDispatcherTest {
           RequestCounterAllocator,
           RecordOrderPublisher,
           BadRootHashMessagesRequestProcessor,
-          RepairProcessor,
           InFlightSubmissionSynchronizerTracker,
           NamedLoggerFactory,
           ConnectedSynchronizerMetrics,
@@ -458,11 +467,9 @@ trait MessageDispatcherTest {
         ts: CantonTimestamp,
     ): Assertion = {
       verify(sut.recordOrderPublisher).tick(
-        argThat[SequencedUpdate](event =>
-          event.sequencerCounter == sc &&
-            event.recordTime == ts &&
-            event.requestCounterO == None
-        )
+        argThat[SequencedUpdate](_.recordTime == ts),
+        argThat[SequencerCounter](_ == sc),
+        argThat[Option[RequestCounter]](_.isEmpty),
       )(anyTraceContext)
       succeed
     }
@@ -548,9 +555,9 @@ trait MessageDispatcherTest {
         val ts = CantonTimestamp.Epoch
         val prefix = TimeProof.timeEventMessageIdPrefix
         val deliver = SequencerTestUtils.mockDeliver(
-          sc.v,
-          ts,
-          synchronizerId,
+          sc = sc.v,
+          timestamp = ts,
+          synchronizerId = synchronizerId,
           messageId = Some(MessageId.tryCreate(s"$prefix testing")),
         )
         // Check that we're calling the topology manager before we're publishing the deliver event and ticking the
@@ -1233,6 +1240,7 @@ trait MessageDispatcherTest {
         val deliver3 = mkDeliver(dummyBatch, SequencerCounter(2), CantonTimestamp.ofEpochSecond(2))
         val deliverError4 = DeliverError.create(
           SequencerCounter(3),
+          None,
           CantonTimestamp.ofEpochSecond(3),
           synchronizerId,
           messageId3,
@@ -1254,11 +1262,8 @@ trait MessageDispatcherTest {
         checkObserveSequencing(
           sut,
           Map(
-            messageId1 -> SequencedSubmission(SequencerCounter(0), CantonTimestamp.Epoch),
-            messageId2 -> SequencedSubmission(
-              SequencerCounter(1),
-              CantonTimestamp.ofEpochSecond(1),
-            ),
+            messageId1 -> SequencedSubmission(CantonTimestamp.Epoch),
+            messageId2 -> SequencedSubmission(CantonTimestamp.ofEpochSecond(1)),
           ),
         )
         checkObserveDeliverError(sut, deliverError4)
@@ -1312,14 +1317,8 @@ trait MessageDispatcherTest {
         checkObserveSequencing(
           sut,
           Map(
-            messageId1 -> SequencedSubmission(
-              SequencerCounter(0),
-              CantonTimestamp.Epoch,
-            ),
-            messageId2 -> SequencedSubmission(
-              SequencerCounter(1),
-              CantonTimestamp.ofEpochSecond(1),
-            ),
+            messageId1 -> SequencedSubmission(CantonTimestamp.Epoch),
+            messageId2 -> SequencedSubmission(CantonTimestamp.ofEpochSecond(1)),
           ),
         )
 

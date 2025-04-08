@@ -701,7 +701,7 @@ abstract class ProtocolProcessor[
         // This looks like a preplay attack, and we mark the request as sequenced in the in-flight
         // submission tracker to avoid the situation that our original submission never gets sequenced
         // and gets picked up by a timely rejection, which would emit a duplicate command completion.
-        val sequenced = SequencedSubmission(sc, ts)
+        val sequenced = SequencedSubmission(ts)
         inFlightSubmissionSynchronizerTracker.observeSequencedRootHash(
           rootHash,
           sequenced,
@@ -939,7 +939,6 @@ abstract class ProtocolProcessor[
         .map { submitterMetadata =>
           steps.eventAndSubmissionIdForRejectedCommand(
             ts,
-            rc,
             sc,
             submitterMetadata,
             rootHash,
@@ -1255,7 +1254,7 @@ abstract class ProtocolProcessor[
     val ts = content.timestamp
     val sc = content.counter
 
-    val processedET = performUnlessClosingEitherUSF(
+    val processedET = performUnlessClosingEitherUSFAsync(
       s"ProtocolProcess.processResult(sc=$sc, traceId=${traceContext.traceId}"
     ) {
       val resultEnvelopes =
@@ -1274,7 +1273,7 @@ abstract class ProtocolProcessor[
       )
 
       processResultInternal1(event, result, requestId, ts, sc)
-    }
+    }(_.value)
 
     handlerResultForConfirmationResult(ts, processedET)
   }

@@ -3,7 +3,6 @@
 
 package com.digitalasset.canton.platform.store.dao
 
-import com.daml.error.ContextualizedErrorLogger
 import com.daml.executors.InstrumentedExecutors
 import com.daml.executors.executors.{
   NamedExecutor,
@@ -22,6 +21,7 @@ import com.digitalasset.canton.logging.LoggingContextWithTrace.{
   withEnrichedLoggingContext,
 }
 import com.digitalasset.canton.logging.{
+  ContextualizedErrorLogger,
   ErrorLoggingContext,
   LoggingContextWithTrace,
   NamedLoggerFactory,

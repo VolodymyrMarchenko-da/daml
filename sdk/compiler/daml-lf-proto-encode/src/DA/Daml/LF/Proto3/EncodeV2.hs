@@ -19,7 +19,7 @@ import qualified Data.HashMap.Strict as HMS
 import qualified Data.List as L
 import qualified Data.Set as S
 import qualified Data.Map.Strict as Map
-import           Data.Maybe (fromMaybe)
+import           Data.Maybe (fromMaybe, fromJust)
 import qualified Data.NameMap as NM
 import qualified Data.Text           as T
 import qualified Data.Text.Lazy      as TL
@@ -277,6 +277,7 @@ encodeBuiltinType = P.Enumerated . Right . \case
     BTRoundingMode -> P.BuiltinTypeROUNDING_MODE
     BTBigNumeric -> P.BuiltinTypeBIGNUMERIC
     BTAnyException -> P.BuiltinTypeANY_EXCEPTION
+    BTFailureCategory -> P.BuiltinTypeFAILURE_CATEGORY
 
 encodeType' :: Type -> Encode P.Type
 encodeType' typ = do
@@ -370,6 +371,10 @@ encodeBuiltinExpr = \case
       LitRoundingHalfEven -> pureLit $ P.BuiltinLitSumRoundingMode $ P.Enumerated $ Right P.BuiltinLit_RoundingModeHALF_EVEN
       LitRoundingUnnecessary -> pureLit $ P.BuiltinLitSumRoundingMode $ P.Enumerated $ Right P.BuiltinLit_RoundingModeUNNECESSARY
 
+    BEFailureCategory fc -> case fc of
+      LitInvalidIndependentOfSystemState -> pureLit $ P.BuiltinLitSumFailureCategory $ P.Enumerated $ Right P.BuiltinLit_FailureCategoryINVALID_INDEPENDENT_OF_SYSTEM_STATE
+      LitInvalidGivenCurrentSystemStateOther -> pureLit $ P.BuiltinLitSumFailureCategory $ P.Enumerated $ Right P.BuiltinLit_FailureCategoryINVALID_GIVEN_CURRENT_SYSTEM_STATE_OTHER
+
     BEEqual -> builtin P.BuiltinFunctionEQUAL
     BELess -> builtin P.BuiltinFunctionLESS
     BELessEq -> builtin P.BuiltinFunctionLESS_EQ
@@ -427,6 +432,8 @@ encodeBuiltinExpr = \case
     BEImplodeText -> builtin P.BuiltinFunctionIMPLODE_TEXT
     BESha256Text -> builtin P.BuiltinFunctionSHA256_TEXT
     BEKecCak256Text -> builtin P.BuiltinFunctionKECCAK256_TEXT
+    BEEncodeHex -> builtin P.BuiltinFunctionTEXT_TO_HEX
+    BEDecodeHex -> builtin P.BuiltinFunctionHEX_TO_TEXT
     BESecp256k1Bool -> builtin P.BuiltinFunctionSECP256K1_BOOL
 
     BEError -> builtin P.BuiltinFunctionERROR
@@ -457,6 +464,8 @@ encodeBuiltinExpr = \case
     BECoerceContractId -> builtin P.BuiltinFunctionCOERCE_CONTRACT_ID
 
     BETypeRepTyConName -> builtin P.BuiltinFunctionTYPE_REP_TYCON_NAME
+
+    BEFailWithStatus -> builtin P.BuiltinFunctionFAIL_WITH_STATUS
 
     where
       builtin = pure . P.ExprSumBuiltin . P.Enumerated . Right
@@ -710,6 +719,9 @@ encodeUpdate = fmap (P.Update . Just) . \case
         update_FetchInterfaceCid <- encodeExpr fetContractId
         pure $ P.UpdateSumFetchInterface P.Update_FetchInterface{..}
     UGetTime -> pure $ P.UpdateSumGetTime P.Unit
+    ULedgerTimeLT e -> do
+        update_LedgerTimeLt <- encodeExpr e
+        pure $ P.UpdateSumLedgerTimeLt (fromJust update_LedgerTimeLt)
     UEmbedExpr typ e -> do
         update_EmbedExprType <- encodeType typ
         update_EmbedExprBody <- encodeExpr e

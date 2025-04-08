@@ -6,10 +6,11 @@ package com.digitalasset.canton.platform.store.backend.common
 import anorm.SqlParser.{int, long}
 import anorm.{BatchSql, NamedParameter, RowParser, ~}
 import com.daml.scalautil.Statement.discard
+import com.digitalasset.canton.RepairCounter
 import com.digitalasset.canton.data.{CantonTimestamp, Offset}
 import com.digitalasset.canton.ledger.api.ParticipantId
 import com.digitalasset.canton.ledger.participant.state.{
-  RequestIndex,
+  RepairIndex,
   SequencerIndex,
   SynchronizerIndex,
 }
@@ -20,7 +21,6 @@ import com.digitalasset.canton.platform.store.backend.{Conversions, ParameterSto
 import com.digitalasset.canton.platform.store.interning.StringInterning
 import com.digitalasset.canton.topology.SynchronizerId
 import com.digitalasset.canton.tracing.TraceContext
-import com.digitalasset.canton.{RequestCounter, SequencerCounter}
 import scalaz.syntax.tag.*
 
 import java.sql.Connection
@@ -54,18 +54,16 @@ private[backend] class ParameterStorageBackendImpl(
     batchUpsert(
       """INSERT INTO
         |  lapi_ledger_end_synchronizer_index
-        |  (synchronizer_id, sequencer_counter, sequencer_timestamp, request_counter, request_timestamp, request_sequencer_counter, record_time)
+        |  (synchronizer_id, sequencer_timestamp, repair_timestamp, repair_counter, record_time)
         |VALUES
-        |  ({internalizedSynchronizerId}, {sequencerCounter}, {sequencerTimestampMicros}, {requestCounter}, {requestTimestampMicros}, {requestSequencerCounter}, {recordTimeMicros})
+        |  ({internalizedSynchronizerId}, {sequencerTimestampMicros}, {repairTimestampMicros}, {repairCounter}, {recordTimeMicros})
         |""".stripMargin,
       """UPDATE
         |  lapi_ledger_end_synchronizer_index
         |SET
-        |  sequencer_counter = case when {sequencerCounter} is null then sequencer_counter else {sequencerCounter} end,
-        |  sequencer_timestamp = case when {sequencerCounter} is null then sequencer_timestamp else {sequencerTimestampMicros} end,
-        |  request_counter = case when {requestCounter} is null then request_counter else {requestCounter} end,
-        |  request_timestamp = case when {requestCounter} is null then request_timestamp else {requestTimestampMicros} end,
-        |  request_sequencer_counter = case when {requestCounter} is null then request_sequencer_counter else {requestSequencerCounter} end,
+        |  sequencer_timestamp = case when {sequencerTimestampMicros} is null then sequencer_timestamp else {sequencerTimestampMicros} end,
+        |  repair_timestamp = case when {repairTimestampMicros} is null then repair_timestamp else {repairTimestampMicros} end,
+        |  repair_counter = case when {repairTimestampMicros} is null then repair_counter else {repairCounter} end,
         |  record_time = {recordTimeMicros}
         |WHERE
         |  synchronizer_id = {internalizedSynchronizerId}
@@ -75,13 +73,11 @@ private[backend] class ParameterStorageBackendImpl(
           "internalizedSynchronizerId" -> stringInterning.synchronizerId.internalize(
             synchronizerId
           ),
-          "sequencerCounter" -> synchronizerIndex.sequencerIndex.map(_.counter.unwrap),
-          "sequencerTimestampMicros" -> synchronizerIndex.sequencerIndex.map(_.timestamp.toMicros),
-          "requestCounter" -> synchronizerIndex.requestIndex.map(_.counter.unwrap),
-          "requestTimestampMicros" -> synchronizerIndex.requestIndex.map(_.timestamp.toMicros),
-          "requestSequencerCounter" -> synchronizerIndex.requestIndex
-            .flatMap(_.sequencerCounter)
-            .map(_.unwrap),
+          "sequencerTimestampMicros" -> synchronizerIndex.sequencerIndex.map(
+            _.sequencerTimestamp.toMicros
+          ),
+          "repairTimestampMicros" -> synchronizerIndex.repairIndex.map(_.timestamp.toMicros),
+          "repairCounter" -> synchronizerIndex.repairIndex.map(_.counter.unwrap),
           "recordTimeMicros" -> synchronizerIndex.recordTime.toMicros,
         )
       },
@@ -281,11 +277,9 @@ private[backend] class ParameterStorageBackendImpl(
       .flatMap(internedSynchronizerId =>
         SQL"""
             SELECT
-              sequencer_counter,
               sequencer_timestamp,
-              request_counter,
-              request_timestamp,
-              request_sequencer_counter,
+              repair_timestamp,
+              repair_counter,
               record_time
             FROM
               lapi_ledger_end_synchronizer_index
@@ -294,21 +288,18 @@ private[backend] class ParameterStorageBackendImpl(
             """
           .asSingleOpt(
             for {
-              requestCounterO <- long("request_counter").?
-              requestTimestampO <- long("request_timestamp").?
-              requestSequencerCounterO <- long("request_sequencer_counter").?
-              sequencerCounterO <- long("sequencer_counter").?
+              repairTimestampO <- long("repair_timestamp").?
+              repairCounterO <- long("repair_counter").?
               sequencerTimestampO <- long("sequencer_timestamp").?
               recordTime <- long("record_time")
             } yield {
-              val requestIndex = (requestCounterO, requestTimestampO) match {
-                case (Some(requestCounter), Some(requestTimestamp)) =>
+              val repairIndex = (repairTimestampO, repairCounterO) match {
+                case (Some(repairTimestamp), Some(repairCounter)) =>
                   List(
                     SynchronizerIndex.of(
-                      RequestIndex(
-                        counter = RequestCounter(requestCounter),
-                        sequencerCounter = requestSequencerCounterO.map(SequencerCounter.apply),
-                        timestamp = CantonTimestamp.ofEpochMicro(requestTimestamp),
+                      RepairIndex(
+                        timestamp = CantonTimestamp.ofEpochMicro(repairTimestamp),
+                        counter = RepairCounter(repairCounter),
                       )
                     )
                   )
@@ -318,32 +309,18 @@ private[backend] class ParameterStorageBackendImpl(
 
                 case _ =>
                   throw new IllegalStateException(
-                    s"Invalid persisted data in lapi_ledger_end_synchronizer_index table: either both request_counter and request_timestamp should be defined or none of them, but an invalid combination found for synchronizer:${synchronizerId.toProtoPrimitive} request_counter: $requestCounterO, request_timestamp: $requestTimestampO"
+                    s"Invalid persisted data in lapi_ledger_end_synchronizer_index table: either both repair_counter and repair_timestamp should be defined or none of them, but an invalid combination found for synchronizer:${synchronizerId.toProtoPrimitive} repair_counter: $repairCounterO, repair_timestamp: $repairTimestampO"
                   )
               }
-              val sequencerIndex = (sequencerCounterO, sequencerTimestampO) match {
-                case (Some(sequencerCounter), Some(sequencerTimestamp)) =>
-                  List(
-                    SynchronizerIndex.of(
-                      SequencerIndex(
-                        counter = SequencerCounter(sequencerCounter),
-                        timestamp = CantonTimestamp.ofEpochMicro(sequencerTimestamp),
-                      )
-                    )
-                  )
-
-                case (None, None) =>
-                  Nil
-
-                case _ =>
-                  throw new IllegalStateException(
-                    s"Invalid persisted data in lapi_ledger_end_synchronizer_index table: either both sequencer_counter and sequencer_timestamp should be defined or none of them, but an invalid combination found for synchronizer:${synchronizerId.toProtoPrimitive} sequencer_counter: $sequencerCounterO, sequencer_timestamp: $sequencerTimestampO"
-                  )
-              }
+              val sequencerIndex = sequencerTimestampO
+                .map(CantonTimestamp.ofEpochMicro)
+                .map(SequencerIndex.apply)
+                .map(SynchronizerIndex.of)
+                .toList
               val recordTimeSynchronizerIndex = SynchronizerIndex.of(
                 CantonTimestamp.ofEpochMicro(recordTime)
               )
-              (recordTimeSynchronizerIndex :: requestIndex ::: sequencerIndex)
+              (recordTimeSynchronizerIndex :: repairIndex ::: sequencerIndex)
                 .reduceOption(_ max _)
                 .getOrElse(
                   throw new IllegalStateException(

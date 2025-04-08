@@ -182,6 +182,7 @@ data BuiltinType
   | BTRoundingMode
   | BTBigNumeric
   | BTAnyException
+  | BTFailureCategory
   deriving (Eq, Data, Generic, NFData, Ord, Show)
 
 -- | Type as used in typed binders.
@@ -231,6 +232,11 @@ data RoundingModeLiteral =
     | LitRoundingUnnecessary
     deriving (Eq, Data, Generic, NFData, Ord, Show)
 
+data FailureCategoryLiteral  =
+      LitInvalidIndependentOfSystemState
+    | LitInvalidGivenCurrentSystemStateOther
+    deriving (Eq, Data, Generic, NFData, Ord, Show)
+
 -- | Builtin operation or literal.
 data BuiltinExpr
   -- Literals
@@ -242,6 +248,7 @@ data BuiltinExpr
   | BEUnit                       -- :: Unit
   | BEBool       !Bool           -- :: Bool
   | BERoundingMode !RoundingModeLiteral -- :: RoundingMode
+  | BEFailureCategory !FailureCategoryLiteral -- :: FailureCategory
 
   -- Exceptions
   | BEError                          -- :: ∀a. Text -> a
@@ -313,6 +320,8 @@ data BuiltinExpr
   | BEImplodeText                -- :: List Text -> Text
   | BESha256Text                 -- :: Text -> Text
   | BEKecCak256Text              -- :: Text -> Text
+  | BEEncodeHex                  -- :: Text -> Text
+  | BEDecodeHex                  -- :: Text -> Text
   | BETextToParty                -- :: Text -> Optional Party
   | BETextToInt64                -- :: Text -> Optional Int64
   | BETextToNumeric              -- :: ∀(s:nat). Numeric s -> Text -> Optional (Numeric s)
@@ -337,6 +346,9 @@ data BuiltinExpr
 
   -- TypeRep
   | BETypeRepTyConName           -- :: TypeRep -> Optional Text
+
+  -- FailureStatus
+  | BEFailWithStatus             -- :: forall a. Text -> FailureCategory -> Text -> TextMap Text -> a
   deriving (Eq, Data, Generic, NFData, Ord, Show)
 
 
@@ -749,6 +761,8 @@ data Update
     }
   -- | Retrieve effective ledger time.
   | UGetTime
+  -- | Check whether the ledger time is strictly before an absolute time.
+  | ULedgerTimeLT !Expr
   -- | See comment for 'SEmbedExpr'
   | UEmbedExpr
     { updateEmbedType :: !Type

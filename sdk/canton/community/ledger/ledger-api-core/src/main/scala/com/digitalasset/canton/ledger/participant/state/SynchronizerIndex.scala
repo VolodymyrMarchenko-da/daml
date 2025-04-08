@@ -3,44 +3,42 @@
 
 package com.digitalasset.canton.ledger.participant.state
 
+import com.digitalasset.canton.RepairCounter
 import com.digitalasset.canton.data.CantonTimestamp
-import com.digitalasset.canton.{RequestCounter, SequencerCounter}
 
 final case class SynchronizerIndex(
-    requestIndex: Option[RequestIndex],
+    repairIndex: Option[RepairIndex],
     sequencerIndex: Option[SequencerIndex],
     recordTime: CantonTimestamp,
 ) {
   def max(otherSynchronizerIndex: SynchronizerIndex): SynchronizerIndex =
     new SynchronizerIndex(
-      requestIndex = requestIndex.iterator
-        .++(otherSynchronizerIndex.requestIndex.iterator)
-        .maxByOption(_.counter),
+      repairIndex = repairIndex.iterator
+        .++(otherSynchronizerIndex.repairIndex.iterator)
+        .maxByOption(identity),
       sequencerIndex = sequencerIndex.iterator
         .++(otherSynchronizerIndex.sequencerIndex.iterator)
-        .maxByOption(_.counter),
+        .maxByOption(_.sequencerTimestamp),
       recordTime = recordTime max otherSynchronizerIndex.recordTime,
     )
 
   override def toString: String =
-    s"SynchronizerIndex(requestIndex=$requestIndex, sequencerIndex=$sequencerIndex, recordTime=$recordTime)"
+    s"SynchronizerIndex(sequencerIndex=$sequencerIndex, repairIndex=$repairIndex, recordTime=$recordTime)"
 }
 
 object SynchronizerIndex {
-  def of(requestIndex: RequestIndex): SynchronizerIndex =
+  def of(repairIndex: RepairIndex): SynchronizerIndex =
     SynchronizerIndex(
-      Some(requestIndex),
-      requestIndex.sequencerCounter.map(
-        SequencerIndex(_, requestIndex.timestamp)
-      ),
-      requestIndex.timestamp,
+      Some(repairIndex),
+      None,
+      repairIndex.timestamp,
     )
 
   def of(sequencerIndex: SequencerIndex): SynchronizerIndex =
     SynchronizerIndex(
       None,
       Some(sequencerIndex),
-      sequencerIndex.timestamp,
+      sequencerIndex.sequencerTimestamp,
     )
 
   def of(recordTime: CantonTimestamp): SynchronizerIndex =
@@ -51,10 +49,13 @@ object SynchronizerIndex {
     )
 }
 
-final case class SequencerIndex(counter: SequencerCounter, timestamp: CantonTimestamp)
+final case class SequencerIndex(sequencerTimestamp: CantonTimestamp)
 
-final case class RequestIndex(
-    counter: RequestCounter,
-    sequencerCounter: Option[SequencerCounter],
-    timestamp: CantonTimestamp,
-)
+final case class RepairIndex(timestamp: CantonTimestamp, counter: RepairCounter)
+
+object RepairIndex {
+  implicit val orderingRepairIndex: Ordering[RepairIndex] =
+    Ordering.by[RepairIndex, (CantonTimestamp, RepairCounter)](repairIndex =>
+      (repairIndex.timestamp, repairIndex.counter)
+    )
+}

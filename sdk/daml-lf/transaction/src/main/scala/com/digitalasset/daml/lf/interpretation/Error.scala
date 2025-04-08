@@ -27,6 +27,8 @@ object Error {
 
   final case class ContractNotFound(cid: Value.ContractId) extends Error
 
+  final case class UnresolvedPackageName(packageName: Ref.PackageName) extends Error
+
   /** Template pre-condition (ensure) evaluated to false and the transaction
     * was aborted. Note that the compiler will throw instead of returning False
     * for code in LF >= 1.14 so this will never be thrown for newer versions.
@@ -141,6 +143,20 @@ object Error {
     */
   final case class ValueNesting(limit: Int) extends Error
 
+  /** User thrown failure with grpc status/metadata
+    *
+    * @param errorId Defines the errorId metadata value in the ErrorInfoDetail metadata of the resulting GrpcStatus
+    * @param failureCategory Canton error category ID, defines the GrpcStatusCode and retry metadata of the resulting GrpcStatus
+    * @param errorMessage Message placed in the top level GrpcStatus message field (with prefixes)
+    * @param metadata Key value metadata placed in the ErrorInfoDetail of the resulting GrpcStatus
+    */
+  final case class FailureStatus(
+      errorId: String,
+      failureCategory: Int,
+      errorMessage: String,
+      metadata: Map[String, String],
+  ) extends Error
+
   sealed case class Upgrade(error: Upgrade.Error) extends Error
 
   object Upgrade {
@@ -164,17 +180,20 @@ object Error {
         actualValue: Value,
     ) extends Error
 
-    final case class ViewMismatch(
-        coid: ContractId,
-        iterfaceId: TypeConName,
-        srcTemplateId: TypeConName,
-        dstTemplateId: TypeConName,
-        srcView: Value,
-        dstView: Value,
-    ) extends Error
-
     final case class DowngradeFailed(expectedType: Ast.Type, actualValue: Value) extends Error
 
+  }
+
+  sealed case class CCTP(error: CCTP.Error) extends Error
+
+  object CCTP {
+    sealed abstract class Error extends Serializable with Product
+
+    final case class MalformedByteEncoding(value: String, cause: String) extends Error
+
+    final case class MalformedKey(key: String, cause: String) extends Error
+
+    final case class MalformedSignature(signature: String, cause: String) extends Error
   }
 
   // Error that can be thrown by dev or PoC feature only
@@ -183,18 +202,6 @@ object Error {
   object Dev {
 
     sealed abstract class Error extends Serializable with Product
-
-    sealed case class CCTP(error: CCTP.Error) extends Error
-
-    object CCTP {
-      sealed abstract class Error extends Serializable with Product
-
-      final case class MalformedByteEncoding(value: String, cause: String) extends Error
-
-      final case class MalformedKey(key: String, cause: String) extends Error
-
-      final case class MalformedSignature(signature: String, cause: String) extends Error
-    }
 
     sealed case class Conformance(
         provided: Node.Create,

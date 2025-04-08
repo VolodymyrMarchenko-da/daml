@@ -3,7 +3,6 @@
 
 package com.digitalasset.canton.platform.apiserver.services.tracking
 
-import com.daml.error.ContextualizedErrorLogger
 import com.daml.ledger.api.v2.command_completion_service.CompletionStreamResponse
 import com.daml.ledger.api.v2.completion.Completion
 import com.daml.ledger.resources.ResourceOwner
@@ -12,7 +11,7 @@ import com.digitalasset.canton.concurrent.DirectExecutionContext
 import com.digitalasset.canton.config.NonNegativeFiniteDuration
 import com.digitalasset.canton.ledger.error.CommonErrors
 import com.digitalasset.canton.lifecycle.FutureUnlessShutdown
-import com.digitalasset.canton.logging.{NamedLoggerFactory, NamedLogging}
+import com.digitalasset.canton.logging.{ContextualizedErrorLogger, NamedLoggerFactory, NamedLogging}
 import com.digitalasset.canton.metrics.LedgerApiServerMetrics
 import com.digitalasset.canton.platform.apiserver.services.tracking.SubmissionTracker.SubmissionKey
 import com.digitalasset.canton.tracing.{Spanning, TraceContext}
@@ -139,7 +138,7 @@ object SubmissionTracker {
   final case class SubmissionKey(
       commandId: String,
       submissionId: String,
-      applicationId: String,
+      userId: String,
       parties: Set[String],
   )
 
@@ -148,7 +147,7 @@ object SubmissionTracker {
       SubmissionKey(
         commandId = completion.commandId,
         submissionId = completion.submissionId,
-        applicationId = completion.applicationId,
+        userId = completion.userId,
         parties = completion.actAs.toSet,
       )
   }

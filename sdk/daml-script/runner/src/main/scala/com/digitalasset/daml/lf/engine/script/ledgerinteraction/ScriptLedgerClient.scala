@@ -14,9 +14,11 @@ sealed trait ScriptLedgerClient extends Product with Serializable
 
 final case class GrpcLedgerClient(
     grpcClient: LedgerClient,
-    val applicationId: Option[Ref.ApplicationId],
+    val userId: Option[Ref.UserId],
     val grpcAdminClient: Option[AdminLedgerClient] = None,
 ) extends ScriptLedgerClient
+
+object GrpcLedgerClient {}
 
 final case class IdeLedgerClient(
     compiledPackages: PureCompiledPackages,

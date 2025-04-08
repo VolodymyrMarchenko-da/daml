@@ -5,14 +5,13 @@ package com.digitalasset.canton.participant.admin
 
 import cats.Eval
 import cats.data.EitherT
-import com.daml.nonempty.NonEmpty
 import com.digitalasset.canton.config.CantonRequireTypes.String255
 import com.digitalasset.canton.config.RequireTypes.PositiveInt
 import com.digitalasset.canton.config.{NonNegativeFiniteDuration, ProcessingTimeout}
 import com.digitalasset.canton.crypto.*
 import com.digitalasset.canton.data.CantonTimestamp
 import com.digitalasset.canton.lifecycle.{FutureUnlessShutdown, UnlessShutdown}
-import com.digitalasset.canton.participant.admin.PackageService.{DarDescription, DarId}
+import com.digitalasset.canton.participant.admin.PackageService.{DarDescription, DarMainPackageId}
 import com.digitalasset.canton.participant.store.{
   ActiveContractStore,
   ContractStore,
@@ -148,7 +147,7 @@ trait PackageOpsTestBase extends AsyncWordSpec with BaseTest with ArgumentMatche
     when(activeContractStore.packageUsage(eqTo(pkgId1), eqTo(contractStore))(anyTraceContext))
       .thenReturn(FutureUnlessShutdown.pure(None))
 
-    val darId = DarId.tryCreate("darhash")
+    val mainPackageId = DarMainPackageId.tryCreate("darhash")
 
     def unvettedPackagesForSnapshots(
         unvettedForAuthorizedSnapshot: Set[LfPackageId],
@@ -230,7 +229,7 @@ class PackageOpsTest extends PackageOpsTestBase {
           .revokeVettingForPackages(
             pkgId1,
             List(pkgId1, pkgId2),
-            DarDescription(darId, str, str, str),
+            DarDescription(mainPackageId, str, str, str),
           )
           .value
           .unwrap
@@ -249,7 +248,7 @@ class PackageOpsTest extends PackageOpsTestBase {
           .revokeVettingForPackages(
             pkgId3,
             List(pkgId3),
-            DarDescription(darId, str, str, str),
+            DarDescription(mainPackageId, str, str, str),
           )
           .value
           .unwrap
@@ -337,7 +336,7 @@ class PackageOpsTest extends PackageOpsTestBase {
       )
 
     private def signedTopologyTransaction(vettedPackages: List[LfPackageId]) =
-      SignedTopologyTransaction(
+      SignedTopologyTransaction.create(
         transaction = TopologyTransaction(
           op = TopologyChangeOp.Replace,
           serial = txSerial,
@@ -345,7 +344,7 @@ class PackageOpsTest extends PackageOpsTestBase {
             VettedPackages.tryCreate(participantId, VettedPackage.unbounded(vettedPackages)),
           protocolVersion = testedProtocolVersion,
         ),
-        signatures = NonEmpty(Set, Signature.noSignature),
+        signatures = Signature.noSignatures,
         isProposal = false,
       )(
         SignedTopologyTransaction.versioningTable.protocolVersionRepresentativeFor(

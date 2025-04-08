@@ -80,10 +80,10 @@ object ScriptLedgerClient {
       compiledPackages: CompiledPackages,
   )(implicit namedLoggerFactory: NamedLoggerFactory): ScriptLedgerClient =
     ledger match {
-      case abstractLedgers.GrpcLedgerClient(grpcClient, applicationId, oAdminClient) =>
+      case abstractLedgers.GrpcLedgerClient(grpcClient, userId, oAdminClient) =>
         new grpcLedgerClient.GrpcLedgerClient(
           grpcClient,
-          applicationId,
+          userId,
           oAdminClient,
           compiledPackages,
         )
@@ -281,16 +281,4 @@ trait ScriptLedgerClient {
       esf: ExecutionSequencerFactory,
       mat: Materializer,
   ): Future[List[ScriptLedgerClient.ReadablePackageId]]
-
-  def vetDar(name: String)(implicit
-      ec: ExecutionContext,
-      esf: ExecutionSequencerFactory,
-      mat: Materializer,
-  ): Future[Unit]
-
-  def unvetDar(name: String)(implicit
-      ec: ExecutionContext,
-      esf: ExecutionSequencerFactory,
-      mat: Materializer,
-  ): Future[Unit]
 }

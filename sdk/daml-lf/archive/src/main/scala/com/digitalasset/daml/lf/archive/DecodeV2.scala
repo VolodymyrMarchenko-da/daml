@@ -1332,6 +1332,12 @@ private[archive] class DecodeV2(minor: LV.Minor) {
         case PLF.Update.SumCase.GET_TIME =>
           Ret(UpdateGetTime)
 
+        case PLF.Update.SumCase.LEDGER_TIME_LT =>
+          val expr = lfUpdate.getLedgerTimeLt
+          decodeExpr(expr, definition) { time =>
+            Ret(UpdateLedgerTimeLT(time))
+          }
+
         case PLF.Update.SumCase.FETCH =>
           val fetch = lfUpdate.getFetch
           decodeExpr(fetch.getCid, definition) { contractId =>
@@ -1450,6 +1456,15 @@ private[archive] class DecodeV2(minor: LV.Minor) {
         case PLF.BuiltinLit.SumCase.ROUNDING_MODE =>
           assertSince(LV.Features.bigNumeric, "Expr.rounding_mode")
           BLRoundingMode(java.math.RoundingMode.valueOf(lfBuiltinLit.getRoundingModeValue))
+        case PLF.BuiltinLit.SumCase.FAILURE_CATEGORY =>
+          BLFailureCategory(lfBuiltinLit.getFailureCategory match {
+            case PLF.BuiltinLit.FailureCategory.INVALID_INDEPENDENT_OF_SYSTEM_STATE =>
+              FCInvalidIndependentOfSystemState
+            case PLF.BuiltinLit.FailureCategory.INVALID_GIVEN_CURRENT_SYSTEM_STATE_OTHER =>
+              FCInvalidGivenCurrentSystemStateOther
+            case PLF.BuiltinLit.FailureCategory.UNRECOGNIZED =>
+              throw Error.Parsing("BuiltinLitFailureCategory.UNRECOGNIZED")
+          })
         case PLF.BuiltinLit.SumCase.SUM_NOT_SET =>
           throw Error.Parsing("BuiltinLit.SUM_NOT_SET")
       }
@@ -1522,7 +1537,7 @@ private[lf] object DecodeV2 {
       BuiltinTypeInfo(CONTRACT_ID, BTContractId),
       BuiltinTypeInfo(DATE, BTDate),
       BuiltinTypeInfo(OPTIONAL, BTOptional),
-      BuiltinTypeInfo(TEXTMAP, BTTextMap, minVersion = LV.Features.textMap),
+      BuiltinTypeInfo(TEXTMAP, BTTextMap),
       BuiltinTypeInfo(GENMAP, BTGenMap),
       BuiltinTypeInfo(ARROW, BTArrow),
       BuiltinTypeInfo(NUMERIC, BTNumeric),
@@ -1531,6 +1546,7 @@ private[lf] object DecodeV2 {
       BuiltinTypeInfo(BIGNUMERIC, BTBigNumeric, minVersion = LV.Features.bigNumeric),
       BuiltinTypeInfo(ROUNDING_MODE, BTRoundingMode, minVersion = LV.Features.bigNumeric),
       BuiltinTypeInfo(ANY_EXCEPTION, BTAnyException, minVersion = LV.Features.exceptions),
+      BuiltinTypeInfo(FAILURE_CATEGORY, BTFailureCategory),
     )
   }
 
@@ -1570,12 +1586,12 @@ private[lf] object DecodeV2 {
       BuiltinFunctionInfo(NUMERIC_TO_INT64, BNumericToInt64),
       BuiltinFunctionInfo(FOLDL, BFoldl),
       BuiltinFunctionInfo(FOLDR, BFoldr),
-      BuiltinFunctionInfo(TEXTMAP_EMPTY, BTextMapEmpty, minVersion = LV.Features.textMap),
-      BuiltinFunctionInfo(TEXTMAP_INSERT, BTextMapInsert, minVersion = LV.Features.textMap),
-      BuiltinFunctionInfo(TEXTMAP_LOOKUP, BTextMapLookup, minVersion = LV.Features.textMap),
-      BuiltinFunctionInfo(TEXTMAP_DELETE, BTextMapDelete, minVersion = LV.Features.textMap),
-      BuiltinFunctionInfo(TEXTMAP_TO_LIST, BTextMapToList, minVersion = LV.Features.textMap),
-      BuiltinFunctionInfo(TEXTMAP_SIZE, BTextMapSize, minVersion = LV.Features.textMap),
+      BuiltinFunctionInfo(TEXTMAP_EMPTY, BTextMapEmpty),
+      BuiltinFunctionInfo(TEXTMAP_INSERT, BTextMapInsert),
+      BuiltinFunctionInfo(TEXTMAP_LOOKUP, BTextMapLookup),
+      BuiltinFunctionInfo(TEXTMAP_DELETE, BTextMapDelete),
+      BuiltinFunctionInfo(TEXTMAP_TO_LIST, BTextMapToList),
+      BuiltinFunctionInfo(TEXTMAP_SIZE, BTextMapSize),
       BuiltinFunctionInfo(GENMAP_EMPTY, BGenMapEmpty),
       BuiltinFunctionInfo(GENMAP_INSERT, BGenMapInsert),
       BuiltinFunctionInfo(GENMAP_LOOKUP, BGenMapLookup),
@@ -1598,6 +1614,8 @@ private[lf] object DecodeV2 {
       BuiltinFunctionInfo(SHA256_TEXT, BSHA256Text),
       BuiltinFunctionInfo(KECCAK256_TEXT, BKECCAK256Text, minVersion = LV.Features.cctp),
       BuiltinFunctionInfo(SECP256K1_BOOL, BSECP256K1Bool, minVersion = LV.Features.cctp),
+      BuiltinFunctionInfo(HEX_TO_TEXT, BDecodeHex, minVersion = LV.Features.cctp),
+      BuiltinFunctionInfo(TEXT_TO_HEX, BEncodeHex, minVersion = LV.Features.cctp),
       BuiltinFunctionInfo(DATE_TO_UNIX_DAYS, BDateToUnixDays),
       BuiltinFunctionInfo(EXPLODE_TEXT, BExplodeText),
       BuiltinFunctionInfo(IMPLODE_TEXT, BImplodeText),
@@ -1625,6 +1643,7 @@ private[lf] object DecodeV2 {
       BuiltinFunctionInfo(BIGNUMERIC_TO_TEXT, BBigNumericToText, minVersion = bigNumeric),
       BuiltinFunctionInfo(ANY_EXCEPTION_MESSAGE, BAnyExceptionMessage, minVersion = exceptions),
       BuiltinFunctionInfo(TYPE_REP_TYCON_NAME, BTypeRepTyConName, minVersion = unstable),
+      BuiltinFunctionInfo(FAIL_WITH_STATUS, BFailWithStatus),
     )
   }
 

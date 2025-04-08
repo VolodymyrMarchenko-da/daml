@@ -3,10 +3,10 @@
 
 package com.digitalasset.canton.ledger.api.validation
 
-import com.daml.error.ContextualizedErrorLogger
 import com.daml.ledger.api.v2.value as api
 import com.daml.ledger.api.v2.value.Value.Sum
 import com.digitalasset.canton.ledger.api.Value
+import com.digitalasset.canton.logging.ContextualizedErrorLogger
 import com.digitalasset.daml.lf.data.*
 import com.digitalasset.daml.lf.value.Value as Lf
 import com.digitalasset.daml.lf.value.Value.{ContractId, ValueUnit}

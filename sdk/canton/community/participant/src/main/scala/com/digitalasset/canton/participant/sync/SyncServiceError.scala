@@ -3,17 +3,24 @@
 
 package com.digitalasset.canton.participant.sync
 
-import com.daml.error.{ErrorCategory, ErrorCode, ErrorGroup, Explanation, Resolution}
 import com.daml.nonempty.NonEmpty
+import com.digitalasset.base.error.{
+  Alarm,
+  AlarmErrorCode,
+  ErrorCategory,
+  ErrorCode,
+  ErrorGroup,
+  Explanation,
+  Resolution,
+}
 import com.digitalasset.canton.common.sequencer.grpc.SequencerInfoLoader.LoadSequencerEndpointInformationResult
 import com.digitalasset.canton.data.CantonTimestamp
 import com.digitalasset.canton.error.CantonErrorGroups.ParticipantErrorGroup.SyncServiceErrorGroup
 import com.digitalasset.canton.error.CantonErrorGroups.ParticipantErrorGroup.TransactionErrorGroup.InjectionErrorGroup
 import com.digitalasset.canton.error.{
-  Alarm,
-  AlarmErrorCode,
   CantonError,
   CombinedError,
+  ContextualizedCantonError,
   ParentCantonError,
   TransactionErrorImpl,
 }
@@ -29,11 +36,11 @@ import com.google.rpc.status.Status
 import io.grpc.Status.Code
 import org.slf4j.event.Level
 
-trait SyncServiceError extends Serializable with Product with CantonError
+trait SyncServiceError extends Serializable with Product with ContextualizedCantonError
 
 object SyncServiceInjectionError extends InjectionErrorGroup {
 
-  import com.digitalasset.daml.lf.data.Ref.{ApplicationId, CommandId}
+  import com.digitalasset.daml.lf.data.Ref.{UserId, CommandId}
 
   @Explanation("This error results if a command is submitted to the passive replica.")
   @Resolution("Send the command to the active replica.")
@@ -42,7 +49,7 @@ object SyncServiceInjectionError extends InjectionErrorGroup {
         id = "NODE_IS_PASSIVE_REPLICA",
         ErrorCategory.TransientServerFailure,
       ) {
-    final case class Error(applicationId: ApplicationId, commandId: CommandId)
+    final case class Error(userId: UserId, commandId: CommandId)
         extends TransactionErrorImpl(
           cause = "Cannot process submitted command. This participant is the passive replica."
         )
@@ -407,7 +414,7 @@ object SyncServiceError extends SyncServiceErrorGroup {
 
     final case class CombinedStartError(override val errors: NonEmpty[Seq[SyncServiceError]])(
         implicit val loggingContext: ErrorLoggingContext
-    ) extends CombinedError[SyncServiceError]
+    ) extends CombinedError
         with SyncServiceError
 
     final case class InitError(

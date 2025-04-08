@@ -165,7 +165,7 @@ class ACSReader(
           globalIdQueriesLimiter.execute(
             dispatcher.executeSql(metrics.index.db.getActiveContractIdsForCreated) { connection =>
               val ids =
-                eventStorageBackend.transactionStreamingQueries
+                eventStorageBackend.updateStreamingQueries
                   .fetchIdsOfCreateEventsForStakeholder(
                     stakeholderO = filter.party,
                     templateIdO = filter.templateId,
@@ -335,7 +335,7 @@ class ACSReader(
               )(connection)
             )
             logger.debug(
-              s"assignEventBatch returned ${ids.size}/${result.size} ${ids.lastOption
+              s"unassignEventBatch returned ${ids.size}/${result.size} ${ids.lastOption
                   .map(last => s"until $last")
                   .getOrElse("")}"
             )
@@ -390,11 +390,12 @@ class ACSReader(
             .executeSql(metrics.index.db.updatesAcsDeltaStream.fetchEventCreatePayloads) {
               implicit connection =>
                 val result = withValidatedActiveAt(
-                  eventStorageBackend.transactionStreamingQueries
-                    .fetchEventPayloadsAcsDelta(EventPayloadSourceForUpdatesAcsDelta.Create)(
-                      eventSequentialIds = ids,
-                      allFilterParties = allFilterParties,
-                    )(connection)
+                  eventStorageBackend.fetchEventPayloadsAcsDelta(
+                    EventPayloadSourceForUpdatesAcsDelta.Create
+                  )(
+                    eventSequentialIds = ids,
+                    requestingParties = allFilterParties,
+                  )(connection)
                 )
                 logger.debug(
                   s"fetchEventPayloads for Create returned ${ids.size}/${result.size} ${ids.lastOption
@@ -613,8 +614,9 @@ class ACSReader(
     Timed.future(
       future = Future.delegate(
         lfValueTranslation
-          .deserializeRaw(eventProjectionProperties)(
-            rawActiveContract.rawCreatedEvent
+          .deserializeRaw(
+            eventProjectionProperties,
+            rawActiveContract.rawCreatedEvent,
           )
           .map(createdEvent =>
             GetActiveContractsResponse(
@@ -638,8 +640,9 @@ class ACSReader(
     Timed.future(
       future = Future.delegate(
         lfValueTranslation
-          .deserializeRaw(eventProjectionProperties)(
-            rawAssignEntry.event.rawCreatedEvent
+          .deserializeRaw(
+            eventProjectionProperties,
+            rawAssignEntry.event.rawCreatedEvent,
           )
           .map(createdEvent =>
             rawAssignEntry.offset -> GetActiveContractsResponse(
@@ -663,14 +666,16 @@ class ACSReader(
     val (rawUnassignEntry, rawCreate) = rawUnassignEntryWithCreate
     Timed.future(
       future = lfValueTranslation
-        .deserializeRaw(eventProjectionProperties)(rawCreate)
+        .deserializeRaw(eventProjectionProperties, rawCreate)
         .map(createdEvent =>
           rawUnassignEntry.offset -> GetActiveContractsResponse(
             workflowId = rawUnassignEntry.workflowId.getOrElse(""),
             contractEntry = GetActiveContractsResponse.ContractEntry.IncompleteUnassigned(
               IncompleteUnassigned(
                 createdEvent = Some(createdEvent),
-                unassignedEvent = Some(UpdateReader.toUnassignedEvent(rawUnassignEntry.event)),
+                unassignedEvent = Some(
+                  UpdateReader.toUnassignedEvent(rawUnassignEntry.offset, rawUnassignEntry.event)
+                ),
               )
             ),
           )

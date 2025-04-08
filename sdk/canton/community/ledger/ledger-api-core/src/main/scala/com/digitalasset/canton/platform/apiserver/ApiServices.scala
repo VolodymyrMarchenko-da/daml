@@ -45,6 +45,7 @@ import com.digitalasset.canton.platform.config.{
   UserManagementServiceConfig,
 }
 import com.digitalasset.canton.platform.store.dao.events.LfValueTranslation
+import com.digitalasset.canton.time.Clock
 import com.digitalasset.canton.tracing.TraceContext
 import com.digitalasset.daml.lf.data.Ref
 import com.digitalasset.daml.lf.engine.*
@@ -124,6 +125,7 @@ object ApiServices {
       dynParamGetter: DynamicSynchronizerParameterGetter,
       interactiveSubmissionServiceConfig: InteractiveSubmissionServiceConfig,
       lfValueTranslation: LfValueTranslation,
+      clock: Clock,
       logger: TracedLogger,
   )(implicit
       materializer: Materializer,
@@ -268,27 +270,36 @@ object ApiServices {
 
     val writeServices = {
       implicit val ec: ExecutionContext = commandExecutionContext
-      val commandExecutor = new TimedCommandExecutor(
-        new LedgerTimeAwareCommandExecutor(
-          new StoreBackedCommandExecutor(
-            engine = engine,
-            participant = participantId,
-            packageSyncService = syncService,
-            contractStore = contractStore,
-            authenticateSerializableContract = authenticateSerializableContract,
-            metrics = metrics,
-            config = engineLoggingConfig,
-            loggerFactory = loggerFactory,
-            dynParamGetter = dynParamGetter,
-            timeProvider = timeProvider,
+      val commandInterpreter =
+        new StoreBackedCommandInterpreter(
+          engine = engine,
+          participant = participantId,
+          packageSyncService = syncService,
+          contractStore = contractStore,
+          authenticateSerializableContract = authenticateSerializableContract,
+          metrics = metrics,
+          config = engineLoggingConfig,
+          loggerFactory = loggerFactory,
+          dynParamGetter = dynParamGetter,
+          timeProvider = timeProvider,
+        )
+
+      val commandExecutor =
+        new TimedCommandExecutor(
+          new LedgerTimeAwareCommandExecutor(
+            delegate = CommandExecutor(
+              syncService = syncService,
+              commandInterpreter = commandInterpreter,
+              topologyAwarePackageSelectionEnabled = ledgerFeatures.topologyAwarePackageSelection,
+              loggerFactory = loggerFactory,
+            ),
+            new ResolveMaximumLedgerTime(maximumLedgerTimeService, loggerFactory),
+            maxRetries = 3,
+            metrics,
+            loggerFactory,
           ),
-          new ResolveMaximumLedgerTime(maximumLedgerTimeService, loggerFactory),
-          maxRetries = 3,
           metrics,
-          loggerFactory,
-        ),
-        metrics,
-      )
+        )
 
       val validateUpgradingPackageResolutions =
         new ValidateUpgradingPackageResolutionsImpl(
@@ -298,6 +309,7 @@ object ApiServices {
         validateDisclosedContracts =
           new ValidateDisclosedContracts(authenticateFatContractInstance),
         validateUpgradingPackageResolutions = validateUpgradingPackageResolutions,
+        topologyAwarePackageSelectionEnabled = ledgerFeatures.topologyAwarePackageSelection,
       )
       val commandSubmissionService =
         CommandSubmissionServiceImpl.createApiService(
@@ -370,34 +382,35 @@ object ApiServices {
         loggerFactory = loggerFactory,
       )
 
-      val apiInteractiveSubmissionService =
-        Option.when(interactiveSubmissionServiceConfig.enabled) {
-          val interactiveSubmissionService =
-            InteractiveSubmissionServiceImpl.createApiService(
-              syncService,
-              timeProvider,
-              timeProviderType,
-              seedService,
-              commandExecutor,
-              metrics,
-              checkOverloaded,
-              lfValueTranslation,
-              interactiveSubmissionServiceConfig,
-              loggerFactory,
-            )
-
-          new ApiInteractiveSubmissionService(
-            commandsValidator = commandsValidator,
-            interactiveSubmissionService = interactiveSubmissionService,
-            currentLedgerTime = () => timeProvider.getCurrentTime,
-            currentUtcTime = () => Instant.now,
-            maxDeduplicationDuration = maxDeduplicationDuration.asJava,
-            submissionIdGenerator = SubmissionIdGenerator.Random,
-            metrics = metrics,
-            telemetry = telemetry,
-            loggerFactory = loggerFactory,
+      val apiInteractiveSubmissionService = {
+        val interactiveSubmissionService =
+          InteractiveSubmissionServiceImpl.createApiService(
+            clock,
+            syncService,
+            timeProvider,
+            timeProviderType,
+            seedService,
+            commandExecutor,
+            metrics,
+            checkOverloaded,
+            lfValueTranslation,
+            interactiveSubmissionServiceConfig,
+            contractStore,
+            loggerFactory,
           )
-        }
+
+        new ApiInteractiveSubmissionService(
+          commandsValidator = commandsValidator,
+          interactiveSubmissionService = interactiveSubmissionService,
+          currentLedgerTime = () => timeProvider.getCurrentTime,
+          currentUtcTime = () => Instant.now,
+          maxDeduplicationDuration = maxDeduplicationDuration.asJava,
+          submissionIdGenerator = SubmissionIdGenerator.Random,
+          metrics = metrics,
+          telemetry = telemetry,
+          loggerFactory = loggerFactory,
+        )
+      }
 
       List(
         new CommandSubmissionServiceAuthorization(apiSubmissionService, authorizer),
@@ -405,8 +418,7 @@ object ApiServices {
         new PartyManagementServiceAuthorization(apiPartyManagementService, authorizer),
         new PackageManagementServiceAuthorization(apiPackageManagementService, authorizer),
         new ParticipantPruningServiceAuthorization(participantPruningService, authorizer),
-      ) ::: apiInteractiveSubmissionService.toList.map(
-        new InteractiveSubmissionServiceAuthorization(_, authorizer)
+        new InteractiveSubmissionServiceAuthorization(apiInteractiveSubmissionService, authorizer),
       )
     }
 

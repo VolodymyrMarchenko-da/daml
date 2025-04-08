@@ -27,7 +27,7 @@ import com.digitalasset.canton.logging.{
 }
 import com.digitalasset.canton.protocol.messages.TopologyTransactionsBroadcast
 import com.digitalasset.canton.sequencing.client.SequencerClient
-import com.digitalasset.canton.time.Clock
+import com.digitalasset.canton.time.{Clock, SynchronizerTimeTracker}
 import com.digitalasset.canton.topology.client.SynchronizerTopologyClientWithInit
 import com.digitalasset.canton.topology.processing.{EffectiveTime, SequencedTime}
 import com.digitalasset.canton.topology.store.{TopologyStore, TopologyStoreId}
@@ -68,12 +68,12 @@ class StoreBasedSynchronizerOutbox(
     with HasFutureSupervision
     with StoreBasedSynchronizerOutboxDispatchHelper {
 
-  runOnShutdown_(new RunOnShutdown {
+  runOnOrAfterClose_(new RunOnClosing {
     override def name: String = "close-participant-topology-outbox"
 
     override def done: Boolean = idleFuture.get().forall(_.isCompleted)
 
-    override def run(): Unit =
+    override def run()(implicit traceContext: TraceContext): Unit =
       idleFuture.get().foreach(_.trySuccess(UnlessShutdown.AbortedDueToShutdown))
   })(TraceContext.empty)
 
@@ -353,7 +353,7 @@ class StoreBasedSynchronizerOutbox(
   private def maxAuthorizedStoreTimestamp()(implicit
       traceContext: TraceContext
   ): FutureUnlessShutdown[Option[(SequencedTime, EffectiveTime)]] =
-    authorizedStore.maxTimestamp(CantonTimestamp.MaxValue, includeRejected = true)
+    authorizedStore.maxTimestamp(SequencedTime.MaxValue, includeRejected = true)
 
   override protected def onClosed(): Unit = {
     val closeables = maybeObserverCloseable.toList ++ List(handle)
@@ -428,6 +428,7 @@ class SynchronizerOutboxFactory(
       protocolVersion: ProtocolVersion,
       targetTopologyClient: SynchronizerTopologyClientWithInit,
       sequencerClient: SequencerClient,
+      timeTracker: SynchronizerTimeTracker,
       clock: Clock,
       synchronizerLoggerFactory: NamedLoggerFactory,
   )(implicit
@@ -438,6 +439,7 @@ class SynchronizerOutboxFactory(
       sequencerClient,
       synchronizerId,
       memberId,
+      timeTracker,
       clock,
       topologyConfig,
       protocolVersion,
@@ -556,6 +558,7 @@ class SynchronizerOutboxFactorySingleCreate(
       protocolVersion: ProtocolVersion,
       targetTopologyClient: SynchronizerTopologyClientWithInit,
       sequencerClient: SequencerClient,
+      timeTracker: SynchronizerTimeTracker,
       clock: Clock,
       synchronizerLoggerFactory: NamedLoggerFactory,
   )(implicit
@@ -575,6 +578,7 @@ class SynchronizerOutboxFactorySingleCreate(
       protocolVersion,
       targetTopologyClient,
       sequencerClient,
+      timeTracker,
       clock,
       synchronizerLoggerFactory,
     ).tap(outbox => outboxRef.putIfAbsent(outbox).discard)

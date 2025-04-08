@@ -89,6 +89,7 @@ safetyStep = \case
       BEUnit              -> Safe 0
       BEBool _            -> Safe 0
       BERoundingMode _    -> Safe 0
+      BEFailureCategory _ -> Safe 0
       BEError             -> Safe 0
       BEAnyExceptionMessage -> Safe 0 -- evaluates user-defined code which may throw
       BEEqual      -> Safe 1 -- may crash if values are incomparable
@@ -144,8 +145,10 @@ safetyStep = \case
       BEExplodeText       -> Safe 1
       BEImplodeText       -> Safe 1
       BESha256Text        -> Safe 1
-      BEKecCak256Text     -> Safe 1
-      BESecp256k1Bool     -> Safe 3
+      BEKecCak256Text     -> Safe 0
+      BEEncodeHex         -> Safe 1
+      BEDecodeHex         -> Safe 0
+      BESecp256k1Bool     -> Safe 0
       BEAppendText        -> Safe 2
       BETimestampToUnixMicroseconds -> Safe 1
       BEUnixMicrosecondsToTimestamp -> Safe 0 -- can fail if the int represents an out-of-bounds date
@@ -157,6 +160,7 @@ safetyStep = \case
       BETextToCodePoints -> Safe 1
       BECoerceContractId -> Safe 1
       BETypeRepTyConName -> Safe 1
+      BEFailWithStatus -> Safe 3 -- expects 4, 3-safe
 
   ERecConF _ fs -> minimum (Safe 0 : map snd fs)
   ERecProjF _ _ s -> s <> Safe 0

@@ -14,7 +14,7 @@ object MonadUtil {
 
   object syntax {
     implicit class IterableSyntax[A](xs: Iterable[A]) {
-      def sequentialTraverse_[M[_]](step: A => M[_])(implicit
+      def sequentialTraverse_[M[_], B](step: A => M[B])(implicit
           monad: Monad[M]
       ): M[Unit] =
         MonadUtil.sequentialTraverse_(xs.iterator)(step)
@@ -43,7 +43,7 @@ object MonadUtil {
     * sequentially or in parallel for future-like monads. In fact, this behaviour differs for
     * different versions of Cats.
     */
-  def sequentialTraverse_[M[_], A](xs: Iterable[A])(step: A => M[_])(implicit
+  def sequentialTraverse_[M[_], A, B](xs: Iterable[A])(step: A => M[B])(implicit
       monad: Monad[M]
   ): M[Unit] =
     sequentialTraverse_(xs.iterator)(step)
@@ -54,7 +54,7 @@ object MonadUtil {
     * sequentially or in parallel for future-like monads. In fact, this behaviour differs for
     * different versions of Cats.
     */
-  def sequentialTraverse_[M[_], A](xs: Iterator[A])(step: A => M[_])(implicit
+  def sequentialTraverse_[M[_], A, B](xs: Iterator[A])(step: A => M[B])(implicit
       monad: Monad[M]
   ): M[Unit] =
     foldLeftM((), xs)((_, x) => monad.void(step(x)))
@@ -112,20 +112,20 @@ object MonadUtil {
 
   /** Parallel traverse with limited parallelism
     */
-  def parTraverseWithLimit[X, M[_], S](parallelism: Int)(
+  def parTraverseWithLimit[X, M[_], S](parallelism: PositiveInt)(
       xs: Seq[X]
   )(processElement: X => M[S])(implicit M: Parallel[M]): M[Seq[S]] =
     M.monad.map(
-      sequentialTraverse(xs.grouped(parallelism).toSeq)(
+      sequentialTraverse(xs.grouped(parallelism.value).toSeq)(
         _.parTraverse(processElement)
       )(M.monad)
     )(_.flatten)
 
-  def parTraverseWithLimit_[X, M[_], S](parallelism: Int)(
+  def parTraverseWithLimit_[X, M[_], S](parallelism: PositiveInt)(
       xs: Seq[X]
   )(processElement: X => M[S])(implicit M: Parallel[M]): M[Unit] =
     M.monad.void(
-      sequentialTraverse(xs.grouped(parallelism).toSeq)(
+      sequentialTraverse(xs.grouped(parallelism.value).toSeq)(
         _.parTraverse(processElement)
       )(M.monad)
     )

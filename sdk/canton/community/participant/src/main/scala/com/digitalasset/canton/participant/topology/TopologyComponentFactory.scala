@@ -82,15 +82,16 @@ class TopologyComponentFactory(
       val terminateTopologyProcessingFUS =
         for {
           topologyEventPublishedOnInitialRecordTime <- FutureUnlessShutdown.outcomeF(
-            ledgerApiStore.topologyEventPublishedOnRecordTime(
+            ledgerApiStore.topologyEventOffsetPublishedOnRecordTime(
               synchronizerId,
               recordOrderPublisher.initTimestamp,
             )
           )
           _ <- participantTerminateProcessing.scheduleMissingTopologyEventsAtInitialization(
-            topologyEventPublishedOnInitialRecordTime = topologyEventPublishedOnInitialRecordTime,
+            topologyEventPublishedOnInitialRecordTime =
+              topologyEventPublishedOnInitialRecordTime.isDefined,
             traceContextForSequencedEvent = sequencedEventStore.traceContext(_),
-            parallelism = batching.parallelism.value,
+            parallelism = batching.parallelism,
           )
         } yield participantTerminateProcessing
 

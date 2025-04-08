@@ -24,7 +24,6 @@ import com.digitalasset.canton.topology.SynchronizerId
 import com.digitalasset.canton.tracing.TraceContext.Implicits.Empty.emptyTraceContext
 import com.digitalasset.canton.tracing.{SerializableTraceContext, TraceContext}
 import com.digitalasset.canton.util.ReassignmentTag.{Source, Target}
-import com.digitalasset.canton.{RequestCounter, SequencerCounter}
 import com.digitalasset.daml.lf.crypto
 import com.digitalasset.daml.lf.data.{Bytes, Ref, Time}
 import com.digitalasset.daml.lf.transaction.GlobalKey
@@ -111,8 +110,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         completionInfo,
         state.Update.CommandRejected.FinalReason(status),
         someSynchronizerId1,
-        RequestCounter(11),
-        SequencerCounter(15),
         CantonTimestamp.ofEpochMicro(1234567),
       )
       val dtos = updateToDtos(update)
@@ -122,7 +119,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           completion_offset = someOffset.unwrap,
           record_time = 1234567L,
           publication_time = 0,
-          application_id = someApplicationId,
+          user_id = someUserId,
           submitters = Set(someParty),
           command_id = someCommandId,
           update_id = None,
@@ -135,7 +132,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           deduplication_duration_nanos = None,
           synchronizer_id = someSynchronizerId1.toProtoPrimitive,
           message_uuid = None,
-          request_sequencer_counter = Some(15),
           is_transaction = true,
           trace_context = serializedEmptyTraceContext,
         )
@@ -160,7 +156,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           completion_offset = someOffset.unwrap,
           record_time = someRecordTime.toMicros,
           publication_time = 0,
-          application_id = someApplicationId,
+          user_id = someUserId,
           submitters = Set(someParty),
           command_id = someCommandId,
           update_id = None,
@@ -173,7 +169,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           deduplication_duration_nanos = None,
           synchronizer_id = someSynchronizerId1.toProtoPrimitive,
           message_uuid = Some(messageUuid.toString),
-          request_sequencer_counter = None,
           is_transaction = true,
           trace_context = serializedEmptyTraceContext,
         )
@@ -207,8 +202,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         updateId = updateId,
         contractMetadata = Map(contractId -> someContractDriverMetadata),
         synchronizerId = someSynchronizerId1,
-        requestCounter = someRequestCounter,
-        sequencerCounter = someSequencerCounter,
         recordTime = someRecordTime,
       )
       val dtos = updateToDtos(update)
@@ -219,7 +212,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         ledger_effective_time = transactionMeta.ledgerEffectiveTime.micros,
         command_id = Some(completionInfo.commandId),
         workflow_id = transactionMeta.workflowId,
-        application_id = Some(completionInfo.applicationId),
+        user_id = Some(completionInfo.userId),
         submitters = Some(completionInfo.actAs.toSet),
         node_id = createNodeId.index,
         contract_id = createNode.coid.toBytes.toByteArray,
@@ -254,7 +247,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         completion_offset = someOffset.unwrap,
         record_time = someRecordTime.toMicros,
         publication_time = 0,
-        application_id = completionInfo.applicationId,
+        user_id = completionInfo.userId,
         submitters = completionInfo.actAs.toSet,
         command_id = completionInfo.commandId,
         update_id = Some(updateId),
@@ -267,7 +260,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         deduplication_duration_seconds = None,
         synchronizer_id = someSynchronizerId1.toProtoPrimitive,
         message_uuid = None,
-        request_sequencer_counter = Some(10),
         is_transaction = true,
         trace_context = serializedEmptyTraceContext,
       )
@@ -321,8 +313,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         updateId = updateId,
         contractMetadata = Map.empty,
         synchronizerId = someSynchronizerId1,
-        requestCounter = RequestCounter(100),
-        sequencerCounter = SequencerCounter(110),
         recordTime = CantonTimestamp.ofEpochMicro(120),
       )
       val dtos = updateToDtos(update)
@@ -335,7 +325,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           ledger_effective_time = transactionMeta.ledgerEffectiveTime.micros,
           command_id = Some(completionInfo.commandId),
           workflow_id = transactionMeta.workflowId,
-          application_id = Some(completionInfo.applicationId),
+          user_id = Some(completionInfo.userId),
           submitters = Some(completionInfo.actAs.toSet),
           node_id = exerciseNodeId.index,
           contract_id = exerciseNode.targetCoid.toBytes.toByteArray,
@@ -371,7 +361,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           completion_offset = someOffset.unwrap,
           record_time = 120,
           publication_time = 0,
-          application_id = completionInfo.applicationId,
+          user_id = completionInfo.userId,
           submitters = completionInfo.actAs.toSet,
           command_id = completionInfo.commandId,
           update_id = Some(updateId),
@@ -384,7 +374,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           deduplication_duration_seconds = None,
           synchronizer_id = someSynchronizerId1.toProtoPrimitive,
           message_uuid = None,
-          request_sequencer_counter = Some(110),
           is_transaction = true,
           trace_context = serializedEmptyTraceContext,
         ),
@@ -432,8 +421,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         updateId = updateId,
         contractMetadata = Map.empty,
         synchronizerId = someSynchronizerId1,
-        requestCounter = someRequestCounter,
-        sequencerCounter = someSequencerCounter,
         recordTime = someRecordTime,
       )
       val dtos = updateToDtos(update)
@@ -446,7 +433,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           ledger_effective_time = transactionMeta.ledgerEffectiveTime.micros,
           command_id = Some(completionInfo.commandId),
           workflow_id = transactionMeta.workflowId,
-          application_id = Some(completionInfo.applicationId),
+          user_id = Some(completionInfo.userId),
           submitters = Some(completionInfo.actAs.toSet),
           node_id = exerciseNodeId.index,
           contract_id = exerciseNode.targetCoid.toBytes.toByteArray,
@@ -477,7 +464,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           completion_offset = someOffset.unwrap,
           record_time = someRecordTime.toMicros,
           publication_time = 0,
-          application_id = completionInfo.applicationId,
+          user_id = completionInfo.userId,
           submitters = completionInfo.actAs.toSet,
           command_id = completionInfo.commandId,
           update_id = Some(updateId),
@@ -490,7 +477,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           deduplication_duration_seconds = None,
           synchronizer_id = someSynchronizerId1.toProtoPrimitive,
           message_uuid = None,
-          request_sequencer_counter = Some(10),
           is_transaction = true,
           trace_context = serializedEmptyTraceContext,
         ),
@@ -576,8 +562,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         updateId = updateId,
         contractMetadata = Map.empty,
         synchronizerId = someSynchronizerId1,
-        requestCounter = someRequestCounter,
-        sequencerCounter = someSequencerCounter,
         recordTime = someRecordTime,
       )
       val dtos = updateToDtos(update)
@@ -590,7 +574,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           ledger_effective_time = transactionMeta.ledgerEffectiveTime.micros,
           command_id = Some(completionInfo.commandId),
           workflow_id = transactionMeta.workflowId,
-          application_id = Some(completionInfo.applicationId),
+          user_id = Some(completionInfo.userId),
           submitters = Some(completionInfo.actAs.toSet),
           node_id = exerciseNodeAId.index,
           contract_id = exerciseNodeA.targetCoid.toBytes.toByteArray,
@@ -624,7 +608,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           ledger_effective_time = transactionMeta.ledgerEffectiveTime.micros,
           command_id = Some(completionInfo.commandId),
           workflow_id = transactionMeta.workflowId,
-          application_id = Some(completionInfo.applicationId),
+          user_id = Some(completionInfo.userId),
           submitters = Some(completionInfo.actAs.toSet),
           node_id = exerciseNodeBId.index,
           contract_id = exerciseNodeB.targetCoid.toBytes.toByteArray,
@@ -658,7 +642,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           ledger_effective_time = transactionMeta.ledgerEffectiveTime.micros,
           command_id = Some(completionInfo.commandId),
           workflow_id = transactionMeta.workflowId,
-          application_id = Some(completionInfo.applicationId),
+          user_id = Some(completionInfo.userId),
           submitters = Some(completionInfo.actAs.toSet),
           node_id = exerciseNodeCId.index,
           contract_id = exerciseNodeC.targetCoid.toBytes.toByteArray,
@@ -692,7 +676,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           ledger_effective_time = transactionMeta.ledgerEffectiveTime.micros,
           command_id = Some(completionInfo.commandId),
           workflow_id = transactionMeta.workflowId,
-          application_id = Some(completionInfo.applicationId),
+          user_id = Some(completionInfo.userId),
           submitters = Some(completionInfo.actAs.toSet),
           node_id = exerciseNodeDId.index,
           contract_id = exerciseNodeD.targetCoid.toBytes.toByteArray,
@@ -723,7 +707,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           completion_offset = someOffset.unwrap,
           record_time = someRecordTime.toMicros,
           publication_time = 0,
-          application_id = completionInfo.applicationId,
+          user_id = completionInfo.userId,
           submitters = completionInfo.actAs.toSet,
           command_id = completionInfo.commandId,
           update_id = Some(updateId),
@@ -736,7 +720,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           deduplication_duration_seconds = None,
           synchronizer_id = someSynchronizerId1.toProtoPrimitive,
           message_uuid = None,
-          request_sequencer_counter = Some(10),
           is_transaction = true,
           trace_context = serializedEmptyTraceContext,
         ),
@@ -792,8 +775,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         updateId = updateId,
         contractMetadata = Map.empty,
         synchronizerId = someSynchronizerId1,
-        requestCounter = someRequestCounter,
-        sequencerCounter = someSequencerCounter,
         recordTime = someRecordTime,
       )
       val dtos = updateToDtos(update)
@@ -804,7 +785,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           completion_offset = someOffset.unwrap,
           record_time = someRecordTime.toMicros,
           publication_time = 0,
-          application_id = completionInfo.applicationId,
+          user_id = completionInfo.userId,
           submitters = completionInfo.actAs.toSet,
           command_id = completionInfo.commandId,
           update_id = Some(updateId),
@@ -817,7 +798,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           deduplication_duration_seconds = None,
           synchronizer_id = someSynchronizerId1.toProtoPrimitive,
           message_uuid = None,
-          request_sequencer_counter = Some(10),
           is_transaction = true,
           trace_context = serializedEmptyTraceContext,
         ),
@@ -867,8 +847,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         updateId = updateId,
         contractMetadata = Map.empty,
         synchronizerId = someSynchronizerId1,
-        requestCounter = someRequestCounter,
-        sequencerCounter = someSequencerCounter,
         recordTime = someRecordTime,
       )
       val dtos = updateToDtos(update)
@@ -881,7 +859,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           ledger_effective_time = transactionMeta.ledgerEffectiveTime.micros,
           command_id = Some(completionInfo.commandId),
           workflow_id = transactionMeta.workflowId,
-          application_id = Some(completionInfo.applicationId),
+          user_id = Some(completionInfo.userId),
           submitters = Some(completionInfo.actAs.toSet),
           node_id = exerciseNodeId.index,
           contract_id = exerciseNode.targetCoid.toBytes.toByteArray,
@@ -922,7 +900,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           completion_offset = someOffset.unwrap,
           record_time = someRecordTime.toMicros,
           publication_time = 0,
-          application_id = completionInfo.applicationId,
+          user_id = completionInfo.userId,
           submitters = completionInfo.actAs.toSet,
           command_id = completionInfo.commandId,
           update_id = Some(updateId),
@@ -935,7 +913,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           deduplication_duration_seconds = None,
           synchronizer_id = someSynchronizerId1.toProtoPrimitive,
           message_uuid = None,
-          request_sequencer_counter = Some(10),
           is_transaction = true,
           trace_context = serializedEmptyTraceContext,
         ),
@@ -986,8 +963,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         updateId = updateId,
         contractMetadata = Map(contractId -> someContractDriverMetadata),
         synchronizerId = someSynchronizerId1,
-        requestCounter = someRequestCounter,
-        sequencerCounter = someSequencerCounter,
         recordTime = someRecordTime,
       )
       val dtos = updateToDtos(update)
@@ -998,7 +973,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         ledger_effective_time = transactionMeta.ledgerEffectiveTime.micros,
         command_id = Some(completionInfo.commandId),
         workflow_id = transactionMeta.workflowId,
-        application_id = Some(completionInfo.applicationId),
+        user_id = Some(completionInfo.userId),
         submitters = Some(completionInfo.actAs.toSet),
         node_id = createNodeId.index,
         contract_id = createNode.coid.toBytes.toByteArray,
@@ -1032,7 +1007,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         ledger_effective_time = transactionMeta.ledgerEffectiveTime.micros,
         command_id = Some(completionInfo.commandId),
         workflow_id = transactionMeta.workflowId,
-        application_id = Some(completionInfo.applicationId),
+        user_id = Some(completionInfo.userId),
         submitters = Some(completionInfo.actAs.toSet),
         node_id = exerciseNodeId.index,
         contract_id = exerciseNode.targetCoid.toBytes.toByteArray,
@@ -1073,7 +1048,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         completion_offset = someOffset.unwrap,
         record_time = someRecordTime.toMicros,
         publication_time = 0,
-        application_id = completionInfo.applicationId,
+        user_id = completionInfo.userId,
         submitters = completionInfo.actAs.toSet,
         command_id = completionInfo.commandId,
         update_id = Some(updateId),
@@ -1086,7 +1061,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         deduplication_duration_seconds = None,
         synchronizer_id = someSynchronizerId1.toProtoPrimitive,
         message_uuid = None,
-        request_sequencer_counter = Some(10),
         is_transaction = true,
         trace_context = serializedEmptyTraceContext,
       )
@@ -1140,8 +1114,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         updateId = updateId,
         contractMetadata = Map.empty,
         synchronizerId = someSynchronizerId1,
-        requestCounter = someRequestCounter,
-        sequencerCounter = someSequencerCounter,
         recordTime = someRecordTime,
       )
       val dtos = updateToDtos(update)
@@ -1151,7 +1123,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           completion_offset = someOffset.unwrap,
           record_time = someRecordTime.toMicros,
           publication_time = 0,
-          application_id = completionInfo.applicationId,
+          user_id = completionInfo.userId,
           submitters = completionInfo.actAs.toSet,
           command_id = completionInfo.commandId,
           update_id = Some(updateId),
@@ -1164,7 +1136,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           deduplication_duration_seconds = None,
           synchronizer_id = someSynchronizerId1.toProtoPrimitive,
           message_uuid = None,
-          request_sequencer_counter = Some(10),
           is_transaction = true,
           trace_context = serializedEmptyTraceContext,
         ),
@@ -1202,8 +1173,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         updateId = Ref.TransactionId.assertFromString("UpdateId"),
         contractMetadata = Map(contractId -> someContractDriverMetadata),
         synchronizerId = someSynchronizerId1,
-        requestCounter = someRequestCounter,
-        sequencerCounter = someSequencerCounter,
         recordTime = someRecordTime,
       )
       val dtos = updateToDtos(update)
@@ -1214,7 +1183,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         ledger_effective_time = transactionMeta.ledgerEffectiveTime.micros,
         command_id = None,
         workflow_id = transactionMeta.workflowId,
-        application_id = None,
+        user_id = None,
         submitters = None,
         node_id = createNodeId.index,
         contract_id = createNode.coid.toBytes.toByteArray,
@@ -1280,8 +1249,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
             completionInfo,
             state.Update.CommandRejected.FinalReason(status),
             someSynchronizerId1,
-            RequestCounter(10),
-            SequencerCounter(10),
             someRecordTime,
           )
           val dtos = updateToDtos(update)
@@ -1291,7 +1258,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
               completion_offset = someOffset.unwrap,
               record_time = someRecordTime.toMicros,
               publication_time = 0,
-              application_id = someApplicationId,
+              user_id = someUserId,
               submitters = Set(someParty),
               command_id = someCommandId,
               update_id = None,
@@ -1304,7 +1271,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
               deduplication_duration_nanos = expectedDeduplicationDurationNanos,
               synchronizer_id = someSynchronizerId1.toProtoPrimitive,
               message_uuid = None,
-              request_sequencer_counter = Some(10),
               is_transaction = true,
               trace_context = serializedEmptyTraceContext,
             )
@@ -1341,8 +1307,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
             updateId = updateId,
             contractMetadata = Map(contractId -> someContractDriverMetadata),
             synchronizerId = someSynchronizerId1,
-            requestCounter = someRequestCounter,
-            sequencerCounter = someSequencerCounter,
             recordTime = someRecordTime,
           )
           val dtos = updateToDtos(update)
@@ -1353,7 +1317,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
             ledger_effective_time = transactionMeta.ledgerEffectiveTime.micros,
             command_id = Some(completionInfo.commandId),
             workflow_id = transactionMeta.workflowId,
-            application_id = Some(completionInfo.applicationId),
+            user_id = Some(completionInfo.userId),
             submitters = Some(completionInfo.actAs.toSet),
             node_id = createNodeId.index,
             contract_id = createNode.coid.toBytes.toByteArray,
@@ -1384,7 +1348,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
             completion_offset = someOffset.unwrap,
             record_time = someRecordTime.toMicros,
             publication_time = 0,
-            application_id = completionInfo.applicationId,
+            user_id = completionInfo.userId,
             submitters = completionInfo.actAs.toSet,
             command_id = completionInfo.commandId,
             update_id = Some(updateId),
@@ -1397,7 +1361,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
             deduplication_duration_nanos = expectedDeduplicationDurationNanos,
             synchronizer_id = someSynchronizerId1.toProtoPrimitive,
             message_uuid = None,
-            request_sequencer_counter = Some(10),
             is_transaction = true,
             trace_context = serializedEmptyTraceContext,
           )
@@ -1444,8 +1407,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
           createNode = createNode,
           contractMetadata = someContractDriverMetadata,
         ),
-        requestCounter = someRequestCounter,
-        sequencerCounter = someSequencerCounter,
         recordTime = someRecordTime,
       )
 
@@ -1457,6 +1418,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         command_id = Some(completionInfo.commandId),
         workflow_id = Some(someWorkflowId),
         submitter = Option(someParty),
+        node_id = 0,
         contract_id = createNode.coid.toBytes.toByteArray,
         template_id = createNode.templateId.toString,
         package_name = createNode.packageName.toString,
@@ -1484,7 +1446,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         completion_offset = someOffset.unwrap,
         record_time = someRecordTime.toMicros,
         publication_time = 0,
-        application_id = completionInfo.applicationId,
+        user_id = completionInfo.userId,
         submitters = completionInfo.actAs.toSet,
         command_id = completionInfo.commandId,
         update_id = Some(updateId),
@@ -1497,7 +1459,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         deduplication_duration_seconds = None,
         synchronizer_id = "x::synchronizer2",
         message_uuid = None,
-        request_sequencer_counter = Some(10),
         is_transaction = false,
         trace_context = serializedEmptyTraceContext,
       )
@@ -1551,8 +1512,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
             List("signatory12", "observer23", "asdasdasd").map(Ref.Party.assertFromString),
           assignmentExclusivity = Some(Time.Timestamp.assertFromLong(123456)),
         ),
-        requestCounter = RequestCounter(100),
-        sequencerCounter = SequencerCounter(110),
         recordTime = CantonTimestamp.ofEpochMicro(120),
       )
 
@@ -1564,6 +1523,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         command_id = Some(completionInfo.commandId),
         workflow_id = Some(someWorkflowId),
         submitter = someParty,
+        node_id = 0,
         contract_id = createNode.coid.toBytes.toByteArray,
         template_id = createNode.templateId.toString,
         package_name = createNode.packageName,
@@ -1581,7 +1541,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         completion_offset = someOffset.unwrap,
         record_time = 120L,
         publication_time = 0,
-        application_id = completionInfo.applicationId,
+        user_id = completionInfo.userId,
         submitters = completionInfo.actAs.toSet,
         command_id = completionInfo.commandId,
         update_id = Some(updateId),
@@ -1594,7 +1554,6 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
         deduplication_duration_seconds = None,
         synchronizer_id = "x::synchronizer1",
         message_uuid = None,
-        request_sequencer_counter = Some(110),
         is_transaction = false,
         trace_context = serializedEmptyTraceContext,
       )
@@ -1680,9 +1639,7 @@ class UpdateToDbDtoSpec extends AnyWordSpec with Matchers {
     "handle SequencerIndexMoved" in {
       val update = state.Update.SequencerIndexMoved(
         synchronizerId = someSynchronizerId1,
-        sequencerCounter = SequencerCounter(1000),
         recordTime = CantonTimestamp.ofEpochMicro(2000),
-        requestCounterO = None,
       )
       val dtos = updateToDtos(update)
 
@@ -1750,10 +1707,8 @@ object UpdateToDbDtoSpec {
     CantonTimestamp(
       Time.Timestamp.assertFromInstant(Instant.parse(("2000-01-01T00:00:00.000000Z")))
     )
-  private val someRequestCounter = RequestCounter(10)
-  private val someSequencerCounter = SequencerCounter(10)
-  private val someApplicationId =
-    Ref.ApplicationId.assertFromString("UpdateToDbDtoSpecApplicationId")
+  private val someUserId =
+    Ref.UserId.assertFromString("UpdateToDbDtoSpecUserId")
   private val someCommandId = Ref.CommandId.assertFromString("UpdateToDbDtoSpecCommandId")
   private val someSubmissionId =
     Ref.SubmissionId.assertFromString("UpdateToDbDtoSpecSubmissionId")
@@ -1763,7 +1718,7 @@ object UpdateToDbDtoSpec {
     crypto.Hash.assertFromString("01cf85cfeb36d628ca2e6f583fa2331be029b6b28e877e1008fb3f862306c086")
   private val someCompletionInfo = state.CompletionInfo(
     actAs = List(someParty),
-    applicationId = someApplicationId,
+    userId = someUserId,
     commandId = someCommandId,
     optDeduplicationPeriod = None,
     submissionId = Some(someSubmissionId),

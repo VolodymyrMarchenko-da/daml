@@ -161,6 +161,7 @@ instance Pretty BuiltinType where
     BTRoundingMode -> "RoundingMode"
     BTBigNumeric -> "BigNumeric"
     BTAnyException -> "AnyException"
+    BTFailureCategory -> "FailureCategory"
 
 pPrintRecord :: Pretty a => PrettyLevel -> Doc ann -> [(FieldName, a)] -> Doc ann
 pPrintRecord lvl sept fields =
@@ -218,6 +219,11 @@ prettyRounding = \case
   LitRoundingHalfEven -> "ROUNDING_HALF_EVEN"
   LitRoundingUnnecessary -> "ROUNDING_UNNECESSARY"
 
+prettyFailureCategory :: FailureCategoryLiteral -> String
+prettyFailureCategory = \case
+  LitInvalidIndependentOfSystemState -> "INVALID_INDEPENDENT_OF_SYSTEM_STATE"
+  LitInvalidGivenCurrentSystemStateOther -> "INVALID_GIVEN_CURRENT_SYSTEM_STATE_OTHER"
+
 instance Pretty BuiltinExpr where
   pPrintPrec lvl prec = \case
     BEInt64 n -> integer (toInteger n)
@@ -226,6 +232,7 @@ instance Pretty BuiltinExpr where
     BEUnit -> keyword_ "unit"
     BEBool b -> keyword_ $ case b of { False -> "false"; True -> "true" }
     BERoundingMode r -> keyword_ $ prettyRounding r
+    BEFailureCategory r -> keyword_ $ prettyFailureCategory r
     BEError -> "ERROR"
     BEAnyExceptionMessage -> "ANY_EXCEPTION_MESSAGE"
     BEEqual -> "EQUAL"
@@ -288,6 +295,8 @@ instance Pretty BuiltinExpr where
     BEImplodeText -> "IMPLODE_TEXT"
     BESha256Text -> "SHA256_TEXT"
     BEKecCak256Text -> "KECCAK256_TEXT"
+    BEEncodeHex -> "TEXT_TO_HEX"
+    BEDecodeHex -> "HEX_TO_TEXT"
     BESecp256k1Bool -> "SECP256K1_BOOL"
     BETrace -> "TRACE"
     BETextToParty -> "TEXT_TO_PARTY"
@@ -296,6 +305,7 @@ instance Pretty BuiltinExpr where
     BECodePointsToText -> "CODE_POINTS_TO_TEXT"
     BECoerceContractId -> "COERCE_CONTRACT_ID"
     BETypeRepTyConName -> "TYPE_REP_TYCON_NAME"
+    BEFailWithStatus -> "FAIL_WITH_STATUS"
 
     where
       epochToText fmt secs =
@@ -415,6 +425,8 @@ instance Pretty Update where
       pPrintAppKeyword lvl prec "fetch_interface" [interfaceArg interface, TmArg cid]
     UGetTime ->
       keyword_ "get_time"
+    ULedgerTimeLT time ->
+      pPrintAppKeyword lvl prec "ledger_time_lt" [TmArg time]
     UEmbedExpr typ e ->
       pPrintAppKeyword lvl prec "uembed_expr" [TyArg typ, TmArg e]
     UFetchByKey tmplId ->

@@ -3,7 +3,6 @@
 
 package com.digitalasset.canton.platform.apiserver.services.admin
 
-import com.daml.error.ContextualizedErrorLogger
 import com.daml.ledger.api.v2.admin.participant_pruning_service.{
   ParticipantPruningServiceGrpc,
   PruneRequest,
@@ -32,6 +31,7 @@ import com.digitalasset.canton.logging.LoggingContextWithTrace.{
 }
 import com.digitalasset.canton.logging.TracedLoggerOps.TracedLoggerOps
 import com.digitalasset.canton.logging.{
+  ContextualizedErrorLogger,
   LedgerErrorLoggingContext,
   LoggingContextWithTrace,
   NamedLoggerFactory,

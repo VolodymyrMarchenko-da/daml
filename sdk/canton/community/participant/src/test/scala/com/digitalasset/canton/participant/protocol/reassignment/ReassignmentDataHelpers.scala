@@ -68,7 +68,7 @@ final case class ReassignmentDataHelpers(
       submittingParticipant,
       LedgerCommandId.assertFromString("assignment-validation-command-id"),
       submissionId = None,
-      LedgerApplicationId.assertFromString("tests"),
+      LedgerUserId.assertFromString("tests"),
       workflowId = None,
     )
 
@@ -109,7 +109,7 @@ final case class ReassignmentDataHelpers(
       )
 
     UnassignmentData(
-      unassignmentTs = reassignmentId.unassignmentTs,
+      reassignmentId = reassignmentId,
       unassignmentRequest = fullUnassignmentViewTree,
       unassignmentDecisionTime = CantonTimestamp.ofEpochSecond(10),
       unassignmentResult = None,
@@ -280,6 +280,7 @@ object ReassignmentDataHelpers {
 
     val deliver = Deliver.create(
       SequencerCounter(0),
+      None,
       sequencingTime,
       synchronizerId,
       Some(MessageId.tryCreate("msg-0")),

@@ -3,7 +3,6 @@
 
 package com.digitalasset.canton.platform.apiserver.services
 
-import com.daml.error.ContextualizedErrorLogger
 import com.daml.ledger.api.v2.package_service.PackageServiceGrpc.PackageService
 import com.daml.ledger.api.v2.package_service.{
   GetPackageRequest,
@@ -31,6 +30,7 @@ import com.digitalasset.canton.logging.LoggingContextWithTrace.{
 }
 import com.digitalasset.canton.logging.TracedLoggerOps.TracedLoggerOps
 import com.digitalasset.canton.logging.{
+  ContextualizedErrorLogger,
   ErrorLoggingContext,
   LoggingContextWithTrace,
   NamedLoggerFactory,

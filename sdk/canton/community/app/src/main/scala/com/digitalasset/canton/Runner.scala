@@ -3,6 +3,7 @@
 
 package com.digitalasset.canton
 
+import com.digitalasset.canton.admin.api.client.commands.LedgerApiCommands
 import com.digitalasset.canton.console.{HeadlessConsole, InteractiveConsole}
 import com.digitalasset.canton.crypto.{Hash, HashAlgorithm, HashPurpose}
 import com.digitalasset.canton.environment.Environment
@@ -13,22 +14,42 @@ import java.io.{File, OutputStream, StringWriter}
 import scala.io.Source
 import scala.util.control.NonFatal
 
-/** Result for exposing the process exit code. All logging is expected to take place inside of the
+/** Result for exposing the process exit code. All logging is expected to take place inside the
   * runner.
   */
-trait Runner[E <: Environment] extends NamedLogging {
+trait Runner extends NamedLogging {
 
-  def run(environment: E): Unit
+  def run(environment: Environment): Unit
 }
 
-class ServerRunner[E <: Environment](
+class ServerRunner(
     bootstrapScript: Option[CantonScript] = None,
     override val loggerFactory: NamedLoggerFactory,
-) extends Runner[E]
+    exitAfterBootstrap: Boolean = false,
+    dars: Seq[String] = Seq.empty,
+) extends Runner
     with NoTracing {
 
-  def run(environment: E): Unit =
+  def run(environment: Environment): Unit =
     try {
+      // TODO(#24954): Convert to using declarative api, when it becomes available
+      def uploadDar(darPath: String): Unit = {
+        val consoleEnvironment = environment.createConsole()
+        consoleEnvironment.participants.local
+          .flatMap(_.underlying)
+          .foreach(p =>
+            consoleEnvironment.run {
+              consoleEnvironment.grpcLedgerCommandRunner
+                .runCommand(
+                  "upload-dar",
+                  LedgerApiCommands.PackageManagementService.UploadDarFile(darPath),
+                  p.config.clientLedgerApi,
+                  Some(p.adminToken.secret),
+                )
+            }
+          )
+      }
+
       def start(): Unit =
         environment
           .startAll() match {
@@ -48,6 +69,8 @@ class ServerRunner[E <: Environment](
         }
 
       bootstrapScript.fold(start())(startWithBootstrap)
+      dars.foreach(uploadDar)
+      if (exitAfterBootstrap) sys.exit(0)
     } catch {
       case ex: Throwable =>
         logger.error(s"Unexpected error while running server: ${ex.getMessage}")
@@ -56,16 +79,17 @@ class ServerRunner[E <: Environment](
     }
 }
 
-class ConsoleInteractiveRunner[E <: Environment](
+class ConsoleInteractiveRunner(
     noTty: Boolean = false,
     bootstrapScript: Option[CantonScript],
+    postScriptCallback: => Unit,
     override val loggerFactory: NamedLoggerFactory,
-) extends Runner[E] {
-  def run(environment: E): Unit = {
+) extends Runner {
+  def run(environment: Environment): Unit = {
     val success =
       try {
         val consoleEnvironment = environment.createConsole()
-        InteractiveConsole(consoleEnvironment, noTty, bootstrapScript, logger)
+        InteractiveConsole(consoleEnvironment, noTty, bootstrapScript, logger, postScriptCallback)
       } catch {
         case NonFatal(_) => false
       }
@@ -73,14 +97,14 @@ class ConsoleInteractiveRunner[E <: Environment](
   }
 }
 
-class ConsoleScriptRunner[E <: Environment](
+class ConsoleScriptRunner(
     scriptPath: CantonScript,
     override val loggerFactory: NamedLoggerFactory,
-) extends Runner[E] {
+) extends Runner {
   private val Ok = 0
   private val Error = 1
 
-  override def run(environment: E): Unit = {
+  override def run(environment: Environment): Unit = {
     val exitCode =
       ConsoleScriptRunner.run(environment, scriptPath, logger) match {
         case Right(_unit) =>
@@ -147,20 +171,21 @@ final case class CantonScriptFromFile(scriptPath: File) extends CantonScript {
 }
 
 object ConsoleScriptRunner extends NoTracing {
-  def apply[E <: Environment](
+  def apply(
       scriptPath: File,
       loggerFactory: NamedLoggerFactory,
-  ): ConsoleScriptRunner[E] =
-    new ConsoleScriptRunner[E](CantonScriptFromFile(scriptPath), loggerFactory)
-  def run[E <: Environment](
-      environment: E,
+  ): ConsoleScriptRunner =
+    new ConsoleScriptRunner(CantonScriptFromFile(scriptPath), loggerFactory)
+
+  def run(
+      environment: Environment,
       scriptPath: File,
       logger: TracedLogger,
   ): Either[HeadlessConsole.HeadlessConsoleError, Unit] =
     run(environment, CantonScriptFromFile(scriptPath), logger)
 
-  def run[E <: Environment](
-      environment: E,
+  def run(
+      environment: Environment,
       cantonScript: CantonScript,
       logger: TracedLogger,
   ): Either[HeadlessConsole.HeadlessConsoleError, Unit] = {

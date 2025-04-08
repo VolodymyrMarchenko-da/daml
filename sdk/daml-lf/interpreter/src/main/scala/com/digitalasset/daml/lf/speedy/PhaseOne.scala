@@ -406,6 +406,8 @@ private[lf] final class PhaseOne(
           case BTextToCodePoints => SBTextToCodePoints
           case BSHA256Text => SBSHA256Text
           case BKECCAK256Text => SBKECCAK256Text
+          case BDecodeHex => SBDecodeHex
+          case BEncodeHex => SBEncodeHex
 
           // List functions
           case BFoldl => SBFoldl
@@ -482,6 +484,8 @@ private[lf] final class PhaseOne(
             throw CompilationError(s"unexpected $bf")
 
           case BAnyExceptionMessage => SBAnyExceptionMessage
+
+          case BFailWithStatus => SBFailWithStatus
         })
     }
   }
@@ -501,6 +505,7 @@ private[lf] final class PhaseOne(
       case BLTimestamp(ts) => STimestamp(ts)
       case BLDate(d) => SDate(d)
       case BLRoundingMode(roundingMode) => SInt64(roundingMode.ordinal.toLong)
+      case BLFailureCategory(failureCategory) => SInt64(failureCategory.cantonCategoryId.toLong)
     })
 
   // ERecUpd(_, f2, ERecUpd(_, f1, e0, e1), e2) => (e0, [f1, f2], [e1, e2])
@@ -731,6 +736,10 @@ private[lf] final class PhaseOne(
         }
       case UpdateGetTime =>
         Return(SUGetTime)
+      case UpdateLedgerTimeLT(time) =>
+        compileExp(env, time) { time =>
+          Return(SBULedgerTimeLT(time))
+        }
       case UpdateLookupByKey(templateId) =>
         Return(t.LookupByKeyDefRef(templateId)())
       case UpdateFetchByKey(templateId) =>

@@ -388,6 +388,7 @@ object Ast {
   case object BTAnyException extends BuiltinType
   case object BTRoundingMode extends BuiltinType
   case object BTBigNumeric extends BuiltinType
+  case object BTFailureCategory extends BuiltinType
 
   //
   // Builtin literals
@@ -404,6 +405,22 @@ object Ast {
   final case class BLTimestamp(override val value: Time.Timestamp) extends BuiltinLit
   final case class BLDate(override val value: Time.Date) extends BuiltinLit
   final case class BLRoundingMode(override val value: java.math.RoundingMode) extends BuiltinLit
+  final case class BLFailureCategory(override val value: FailureCategory) extends BuiltinLit
+
+  sealed abstract class FailureCategory(override val toString: String, val cantonCategoryId: Int)
+      extends Equals
+      with Product
+      with Serializable
+  // FailureCategory names and IDs must be kept up to date with canton error categories defined in `CommandExecutionErrors.scala`
+  final case object FCInvalidIndependentOfSystemState
+      extends FailureCategory("InvalidIndependentOfSystemState", 8)
+  final case object FCInvalidGivenCurrentSystemStateOther
+      extends FailureCategory("InvalidGivenCurrentSystemStateOther", 9)
+
+  object FailureCategory {
+    def all: Seq[FailureCategory] =
+      Seq(FCInvalidIndependentOfSystemState, FCInvalidGivenCurrentSystemStateOther)
+  }
 
   //
   // Builtin constructors
@@ -501,6 +518,8 @@ object Ast {
   final case object BSHA256Text extends BuiltinFunction // : Text -> Text
 
   final case object BKECCAK256Text extends BuiltinFunction // : Text -> Text
+  final case object BDecodeHex extends BuiltinFunction // : Text -> Text
+  final case object BEncodeHex extends BuiltinFunction // : Text -> Text
 
   // Errors
   final case object BError extends BuiltinFunction // : ∀a. Text → a
@@ -549,6 +568,9 @@ object Ast {
 
   // TypeRep
   final case object BTypeRepTyConName extends BuiltinFunction // : TypeRep → Optional Text
+
+  final case object BFailWithStatus
+      extends BuiltinFunction // : ∀a. Text → FailureCategory → Text → TextMap Text → a
 
   final case class EExperimental(name: String, typ: Type) extends Expr
 
@@ -601,6 +623,7 @@ object Ast {
       argE: Expr,
   ) extends Update
   case object UpdateGetTime extends Update
+  final case class UpdateLedgerTimeLT(time: Expr) extends Update
   final case class UpdateFetchByKey(templateId: TypeConName) extends Update
   final case class UpdateLookupByKey(templateId: TypeConName) extends Update
   final case class UpdateEmbedExpr(typ: Type, body: Expr) extends Update
@@ -1246,19 +1269,8 @@ object Ast {
       } else {
         false
       }
-    // package Name if the package support upgrade
-    // TODO: https://github.com/digital-asset/daml/issues/17965
-    //  drop that in daml-3
     private[lf] def pkgName: Ref.PackageName = metadata.name
-    private[lf] def pkgVersion: Option[Ref.PackageVersion] = {
-      if (LanguageVersion.supportsPersistedPackageVersion(languageVersion))
-        Some(metadata.version)
-      else
-        None
-    }
-    private[lf] def pkgNameVersion: (Ref.PackageName, Option[Ref.PackageVersion]) =
-      pkgName -> pkgVersion
-
+    private[lf] def pkgVersion: Ref.PackageVersion = metadata.version
   }
 
   final class GenPackageCompanion[E] private[Ast] {

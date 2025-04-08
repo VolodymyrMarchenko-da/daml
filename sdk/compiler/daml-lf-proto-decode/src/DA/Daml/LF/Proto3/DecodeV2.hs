@@ -376,6 +376,8 @@ decodeBuiltinFunction = \case
   LF2.BuiltinFunctionSHA256_TEXT  -> pure BESha256Text
   LF2.BuiltinFunctionKECCAK256_TEXT -> pure BEKecCak256Text
   LF2.BuiltinFunctionSECP256K1_BOOL -> pure BESecp256k1Bool
+  LF2.BuiltinFunctionHEX_TO_TEXT -> pure BEDecodeHex
+  LF2.BuiltinFunctionTEXT_TO_HEX -> pure BEEncodeHex
 
   LF2.BuiltinFunctionDATE_TO_UNIX_DAYS -> pure BEDateToUnixDays
   LF2.BuiltinFunctionUNIX_DAYS_TO_DATE -> pure BEUnixDaysToDate
@@ -399,6 +401,8 @@ decodeBuiltinFunction = \case
   LF2.BuiltinFunctionSHIFT_RIGHT_BIGNUMERIC -> pure BEShiftRightBigNumeric
   LF2.BuiltinFunctionBIGNUMERIC_TO_NUMERIC -> pure BEBigNumericToNumeric
   LF2.BuiltinFunctionNUMERIC_TO_BIGNUMERIC -> pure BENumericToBigNumeric
+
+  LF2.BuiltinFunctionFAIL_WITH_STATUS -> pure BEFailWithStatus
 
 decodeLocation :: LF2.Location -> Decode SourceLoc
 decodeLocation (LF2.Location mbModRef mbRange) = do
@@ -630,6 +634,8 @@ decodeUpdate LF2.Update{..} = mayDecode "updateSum" updateSum $ \case
       <*> mayDecode "update_FetchInterfaceCid" update_FetchInterfaceCid decodeExpr
   LF2.UpdateSumGetTime LF2.Unit ->
     pure (EUpdate UGetTime)
+  LF2.UpdateSumLedgerTimeLt time ->
+    fmap (EUpdate . ULedgerTimeLT) (decodeExpr time)
   LF2.UpdateSumEmbedExpr LF2.Update_EmbedExpr{..} ->
     fmap EUpdate $ UEmbedExpr
       <$> mayDecode "update_EmbedExprType" update_EmbedExprType decodeType
@@ -713,6 +719,11 @@ decodeBuiltinLit (LF2.BuiltinLit mbSum) = mayDecode "builtinLitSum" mbSum $ \cas
        LF2.BuiltinLit_RoundingModeHALF_EVEN -> BERoundingMode LitRoundingHalfEven
        LF2.BuiltinLit_RoundingModeUNNECESSARY -> BERoundingMode LitRoundingUnnecessary
     Proto.Enumerated (Left idx) -> throwError (UnknownEnum "BuiltinLitSumRoundingMode" idx)
+  LF2.BuiltinLitSumFailureCategory enum -> case enum of
+    Proto.Enumerated (Right mode) -> pure $ case mode of
+       LF2.BuiltinLit_FailureCategoryINVALID_INDEPENDENT_OF_SYSTEM_STATE -> BEFailureCategory LitInvalidIndependentOfSystemState
+       LF2.BuiltinLit_FailureCategoryINVALID_GIVEN_CURRENT_SYSTEM_STATE_OTHER -> BEFailureCategory LitInvalidGivenCurrentSystemStateOther
+    Proto.Enumerated (Left idx) -> throwError (UnknownEnum "BuiltinLitSumFailureCategory" idx)
 
 decodeNumericLit :: T.Text -> Decode BuiltinExpr
 decodeNumericLit (T.unpack -> str) = case readMaybe str of
@@ -750,6 +761,7 @@ decodeBuiltin = \case
   LF2.BuiltinTypeROUNDING_MODE -> pure BTRoundingMode
   LF2.BuiltinTypeBIGNUMERIC -> pure BTBigNumeric
   LF2.BuiltinTypeANY_EXCEPTION -> pure BTAnyException
+  LF2.BuiltinTypeFAILURE_CATEGORY -> pure BTFailureCategory
 
 decodeTypeLevelNat :: Integer -> Decode TypeLevelNat
 decodeTypeLevelNat m =

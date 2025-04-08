@@ -48,7 +48,6 @@ import com.digitalasset.canton.participant.protocol.{
 }
 import com.digitalasset.canton.participant.store.ReassignmentStore.ReassignmentStoreError
 import com.digitalasset.canton.participant.sync.SyncServiceError.SyncServiceAlarm
-import com.digitalasset.canton.participant.util.DAMLe
 import com.digitalasset.canton.protocol.*
 import com.digitalasset.canton.protocol.messages.*
 import com.digitalasset.canton.protocol.messages.Verdict.{
@@ -85,9 +84,7 @@ trait ReassignmentProcessingSteps[
 
   val synchronizerId: ReassignmentTag[SynchronizerId]
 
-  protected def engine: DAMLe
-
-  protected def serializableContractAuthenticator: ContractAuthenticator
+  protected def contractAuthenticator: ContractAuthenticator
 
   protected implicit def ec: ExecutionContext
 
@@ -153,7 +150,7 @@ trait ReassignmentProcessingSteps[
       traceContext: TraceContext
   ): EitherT[Future, ReassignmentProcessorError, Unit] =
     EitherT.fromEither(
-      serializableContractAuthenticator
+      contractAuthenticator
         .authenticateSerializable(parsedRequest.fullViewTree.contract)
         .leftMap[ReassignmentProcessorError](ContractError.apply)
     )
@@ -273,7 +270,6 @@ trait ReassignmentProcessingSteps[
 
   override def eventAndSubmissionIdForRejectedCommand(
       ts: CantonTimestamp,
-      rc: RequestCounter,
       sc: SequencerCounter,
       submitterMetadata: ViewSubmitterMetadata,
       rootHash: RootHash,
@@ -287,7 +283,7 @@ trait ReassignmentProcessingSteps[
 
     lazy val completionInfo = CompletionInfo(
       actAs = List(submitterMetadata.submitter),
-      applicationId = submitterMetadata.applicationId,
+      userId = submitterMetadata.userId,
       commandId = submitterMetadata.commandId,
       optDeduplicationPeriod = None,
       submissionId = None,
@@ -297,8 +293,6 @@ trait ReassignmentProcessingSteps[
         completionInfo,
         rejection,
         synchronizerId.unwrap,
-        rc,
-        sc,
         ts,
       )
     )
@@ -316,22 +310,20 @@ trait ReassignmentProcessingSteps[
     val completionInfoO = Option.when(isSubmittingParticipant)(
       CompletionInfo(
         actAs = List(pendingReassignment.submitterMetadata.submitter),
-        applicationId = pendingReassignment.submitterMetadata.applicationId,
+        userId = pendingReassignment.submitterMetadata.userId,
         commandId = pendingReassignment.submitterMetadata.commandId,
         optDeduplicationPeriod = None,
         submissionId = pendingReassignment.submitterMetadata.submissionId,
       )
     )
 
-    rejectionReason.logWithContext(Map("requestId" -> pendingReassignment.requestId.toString))
+    rejectionReason.logRejection(Map("requestId" -> pendingReassignment.requestId.toString))
     val rejection = Update.CommandRejected.FinalReason(rejectionReason.reason())
     val updateO = completionInfoO.map(info =>
       Update.SequencedCommandRejected(
         info,
         rejection,
         synchronizerId.unwrap,
-        pendingReassignment.requestCounter,
-        pendingReassignment.requestSequencerCounter,
         pendingReassignment.requestId.unwrap,
       )
     )

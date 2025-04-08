@@ -5,8 +5,15 @@ package com.digitalasset.canton.participant.protocol
 
 import cats.data.EitherT
 import cats.syntax.bifunctor.*
-import com.daml.error.*
 import com.daml.metrics.api.MetricsContext
+import com.digitalasset.base.error.{
+  Alarm,
+  AlarmErrorCode,
+  ErrorCategory,
+  ErrorCode,
+  Explanation,
+  Resolution,
+}
 import com.digitalasset.canton.*
 import com.digitalasset.canton.concurrent.FutureSupervisor
 import com.digitalasset.canton.config.{ProcessingTimeout, TestingConfigInternal}
@@ -21,7 +28,6 @@ import com.digitalasset.canton.ledger.participant.state.{ChangeId, SubmitterInfo
 import com.digitalasset.canton.lifecycle.{FutureUnlessShutdown, PromiseUnlessShutdownFactory}
 import com.digitalasset.canton.logging.pretty.{Pretty, PrettyPrinting}
 import com.digitalasset.canton.logging.{ErrorLoggingContext, NamedLoggerFactory}
-import com.digitalasset.canton.participant.ParticipantNodeParameters
 import com.digitalasset.canton.participant.metrics.TransactionProcessingMetrics
 import com.digitalasset.canton.participant.protocol.ProcessingSteps.WrapsProcessorError
 import com.digitalasset.canton.participant.protocol.ProtocolProcessor.ProcessorError
@@ -63,7 +69,6 @@ class TransactionProcessor(
     synchronizerId: SynchronizerId,
     damle: DAMLe,
     staticSynchronizerParameters: StaticSynchronizerParameters,
-    parameters: ParticipantNodeParameters,
     crypto: SynchronizerCryptoClient,
     sequencerClient: SequencerClient,
     inFlightSubmissionSynchronizerTracker: InFlightSubmissionSynchronizerTracker,
@@ -107,7 +112,7 @@ class TransactionProcessor(
         ContractAuthenticator(crypto.pureCrypto),
         damle.enrichTransaction,
         damle.enrichCreateNode,
-        new AuthorizationValidator(participantId, parameters.enableExternalAuthorization),
+        new AuthorizationValidator(participantId),
         new InternalConsistencyChecker(
           loggerFactory
         ),
@@ -130,7 +135,7 @@ class TransactionProcessor(
       submissionParam: TransactionProcessingSteps.SubmissionParam
   ): MetricsContext =
     MetricsContext(
-      "application-id" -> submissionParam.submitterInfo.applicationId,
+      "user-id" -> submissionParam.submitterInfo.userId,
       "type" -> "send-confirmation-request",
     )
 
@@ -246,18 +251,10 @@ object TransactionProcessor {
     override def underlyingProcessorError(): Option[ProcessorError] = None
   }
 
-  trait TransactionSubmissionError extends TransactionProcessorError with TransactionError {
-    override protected def pretty: Pretty[TransactionSubmissionError] =
-      this.prettyOfString(_ =>
-        this.code.toMsg(
-          cause,
-          correlationId = None,
-          limit = None,
-        ) + "; " + ContextualizedErrorLogger.formatContextAsString(
-          context
-        )
-      )
-  }
+  trait TransactionSubmissionError
+      extends TransactionProcessorError
+      with TransactionError
+      with TransactionErrorPrettyPrinting
 
   object SubmissionErrors extends SubmissionErrorGroup {
 

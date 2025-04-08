@@ -28,7 +28,6 @@ import com.digitalasset.canton.tracing.TraceContext
 import com.digitalasset.canton.util.FutureInstances.*
 import com.digitalasset.canton.util.ReassignmentTag.{Source, Target}
 import com.digitalasset.canton.util.{Checked, CheckedT, EitherTUtil, MonadUtil}
-import com.digitalasset.canton.version.ProtocolVersion
 import com.google.common.annotations.VisibleForTesting
 
 import scala.concurrent.{ExecutionContext, Future}
@@ -303,7 +302,6 @@ object ReassignmentStore {
   /** The data for a reassignment and possible when the reassignment was completed. */
   final case class ReassignmentEntry(
       reassignmentId: ReassignmentId,
-      sourceProtocolVersion: Source[ProtocolVersion],
       contract: SerializableContract,
       unassignmentRequest: Option[FullUnassignmentTree],
       unassignmentDecisionTime: CantonTimestamp,
@@ -311,9 +309,9 @@ object ReassignmentStore {
       reassignmentGlobalOffset: Option[ReassignmentGlobalOffset],
       assignmentTs: Option[CantonTimestamp],
   ) {
-    def reassignmentDataO: Option[UnassignmentData] = unassignmentRequest.map(
+    def unassignmentDataO: Option[UnassignmentData] = unassignmentRequest.map(
       UnassignmentData(
-        reassignmentId.unassignmentTs,
+        reassignmentId,
         _,
         unassignmentDecisionTime,
         unassignmentResult,
@@ -328,7 +326,7 @@ object ReassignmentStore {
         otherReassignmentData: UnassignmentData
     ): Checked[ReassignmentDataAlreadyExists, ReassignmentAlreadyCompleted, ReassignmentEntry] =
       for {
-        reassignmentData <- this.reassignmentDataO match {
+        reassignmentData <- this.unassignmentDataO match {
           case None => Checked.result(otherReassignmentData)
           case Some(oldReassignmentData) =>
             Checked.fromEither(
@@ -342,7 +340,7 @@ object ReassignmentStore {
     private[store] def addUnassignmentResult(
         unassignmentResult: DeliveredUnassignmentResult
     ): Either[UnassignmentResultAlreadyExists, ReassignmentEntry] = {
-      val reassignmentData = reassignmentDataO.getOrElse(
+      val reassignmentData = unassignmentDataO.getOrElse(
         throw new IllegalStateException("reassignment data should be inserted")
       )
       reassignmentData
@@ -371,11 +369,25 @@ object ReassignmentStore {
     ): ReassignmentEntry =
       ReassignmentEntry(
         reassignmentData.reassignmentId,
-        reassignmentData.sourceProtocolVersion,
         reassignmentData.contract,
         Some(reassignmentData.unassignmentRequest),
         reassignmentData.unassignmentDecisionTime,
         reassignmentData.unassignmentResult,
+        reassignmentGlobalOffset,
+        tsCompletion,
+      )
+
+    def apply(
+        assignmentData: AssignmentData,
+        reassignmentGlobalOffset: Option[ReassignmentGlobalOffset],
+        tsCompletion: Option[CantonTimestamp],
+    ): ReassignmentEntry =
+      ReassignmentEntry(
+        assignmentData.reassignmentId,
+        assignmentData.contract,
+        None,
+        assignmentData.unassignmentDecisionTime,
+        None,
         reassignmentGlobalOffset,
         tsCompletion,
       )
@@ -475,4 +487,9 @@ trait ReassignmentLookup {
   def findReassignmentEntry(reassignmentId: ReassignmentId)(implicit
       traceContext: TraceContext
   ): EitherT[FutureUnlessShutdown, UnknownReassignmentId, ReassignmentEntry]
+
+  @VisibleForTesting
+  def listInFlightReassignmentIds()(implicit
+      traceContext: TraceContext
+  ): FutureUnlessShutdown[Seq[ReassignmentId]]
 }

@@ -5,17 +5,16 @@ package com.digitalasset.canton.participant.admin
 
 import better.files.*
 import cats.data.EitherT
-import com.daml.error.DamlError
+import com.digitalasset.base.error.RpcError
 import com.digitalasset.canton.BaseTest.getResourcePath
 import com.digitalasset.canton.buildinfo.BuildInfo
 import com.digitalasset.canton.concurrent.FutureSupervisor
 import com.digitalasset.canton.config.CantonRequireTypes.String255
 import com.digitalasset.canton.config.{PackageMetadataViewConfig, ProcessingTimeout}
 import com.digitalasset.canton.data.CantonTimestamp
-import com.digitalasset.canton.error.CantonError
 import com.digitalasset.canton.ledger.error.PackageServiceErrors
 import com.digitalasset.canton.lifecycle.{FutureUnlessShutdown, UnlessShutdown}
-import com.digitalasset.canton.participant.admin.PackageService.DarId
+import com.digitalasset.canton.participant.admin.PackageService.DarMainPackageId
 import com.digitalasset.canton.participant.admin.PackageServiceTest.{
   AdminWorkflowsPath,
   readAdminWorkflows,
@@ -186,7 +185,7 @@ class PackageServiceTest
         packages.map(_.packageId).toSet should contain theSameElementsAs expectedPackageIds
         val darV = dar.valueOrFail("dar should be present")
         darV.bytes shouldBe bytes
-        darV.descriptor.darId shouldBe hash
+        darV.descriptor.mainPackageId shouldBe hash
         darV.descriptor.name.str shouldBe "CantonExamples"
       }
     }
@@ -264,8 +263,8 @@ class PackageServiceTest
                 value.code shouldBe PackageServiceErrors.Reading.MainPackageInDarDoesNotMatchExpected
               case Right(value) => fail("the expected main package id check should have failed")
             }
-          darId <- attempt(None).map(_.valueOrFail("failed to upload dar"))
-          _ <- attempt(Some(darId.unwrap)).map {
+          mainPackageId <- attempt(None).map(_.valueOrFail("failed to upload dar"))
+          _ <- attempt(Some(mainPackageId.unwrap)).map {
             case Left(value) => fail(s"should succeed but found $value")
             case Right(value) => succeed
           }
@@ -374,8 +373,8 @@ class PackageServiceTest
 
   "The DAR referenced by the requested hash does not exist" when {
     def rejectOnMissingDar(
-        req: PackageService => EitherT[FutureUnlessShutdown, CantonError, Unit],
-        darId: DarId,
+        req: PackageService => EitherT[FutureUnlessShutdown, RpcError, Unit],
+        mainPackageId: DarMainPackageId,
         op: String,
     ): Env => Future[Assertion] = { env =>
       req(env.sut).value.unwrap.map {
@@ -384,14 +383,14 @@ class PackageServiceTest
             CantonPackageServiceError.Fetching.DarNotFound
               .Reject(
                 operation = op,
-                darId = darId.unwrap,
+                mainPackageId = mainPackageId.unwrap,
               )
           )
         case UnlessShutdown.AbortedDueToShutdown => fail("Unexpected shutdown")
       }
     }
 
-    val unknownDarId = DarId.tryCreate("darid")
+    val unknownDarId = DarMainPackageId.tryCreate("darid")
 
     "requested by PackageService.unvetDar" should {
       "reject the request with an error" in withEnv(
@@ -423,7 +422,7 @@ class PackageServiceTest
         upgradeIncompatibleDars.map { case (darName, archive) =>
           val payload = encodeDarArchive(archive)
           EitherT
-            .rightT[FutureUnlessShutdown, DamlError](())
+            .rightT[FutureUnlessShutdown, RpcError](())
             // Delegate the future within
             .flatMap(_ =>
               sut.upload(

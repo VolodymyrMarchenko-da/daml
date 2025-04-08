@@ -3,7 +3,6 @@
 
 package com.digitalasset.canton.platform.apiserver.services.admin
 
-import com.daml.error.ContextualizedErrorLogger
 import com.daml.ledger.api.v2.admin.user_management_service as proto
 import com.daml.ledger.api.v2.admin.user_management_service.{
   CreateUserResponse,
@@ -40,6 +39,7 @@ import com.digitalasset.canton.ledger.participant.state.index.IndexPartyManageme
 import com.digitalasset.canton.logging.LoggingContextUtil.createLoggingContext
 import com.digitalasset.canton.logging.LoggingContextWithTrace.withEnrichedLoggingContext
 import com.digitalasset.canton.logging.{
+  ContextualizedErrorLogger,
   ErrorLoggingContext,
   LoggingContextWithTrace,
   NamedLoggerFactory,
@@ -93,7 +93,10 @@ private[apiserver] final class ApiUserManagementService(
           pUser <- requirePresence(request.user, "user")
           pUserId <- requireUserId(pUser.id, "id")
           pMetadata = pUser.metadata.getOrElse(
-            com.daml.ledger.api.v2.admin.object_meta.ObjectMeta()
+            com.daml.ledger.api.v2.admin.object_meta.ObjectMeta(
+              resourceVersion = "",
+              annotations = Map.empty,
+            )
           )
           _ <- requireEmptyString(
             pMetadata.resourceVersion,
@@ -151,7 +154,10 @@ private[apiserver] final class ApiUserManagementService(
           pUser <- requirePresence(request.user, "user")
           pUserId <- requireUserId(pUser.id, "user.id")
           pMetadata = pUser.metadata.getOrElse(
-            com.daml.ledger.api.v2.admin.object_meta.ObjectMeta()
+            com.daml.ledger.api.v2.admin.object_meta.ObjectMeta(
+              resourceVersion = "",
+              annotations = Map.empty,
+            )
           )
           pFieldMask <- requirePresence(request.updateMask, "update_mask")
           pOptPrimaryParty <- optionalString(pUser.primaryParty)(requireParty)
@@ -597,7 +603,7 @@ object ApiUserManagementService {
   object AuthenticatedUserContext {
     def apply(claims: Claims): AuthenticatedUserContext = claims match {
       case claims: Claims if claims.resolvedFromUser =>
-        AuthenticatedUserContext(claims.applicationId, claims.claims.contains(ClaimAdmin))
+        AuthenticatedUserContext(claims.userId, claims.claims.contains(ClaimAdmin))
       case claims: Claims =>
         AuthenticatedUserContext(None, claims.claims.contains(ClaimAdmin))
     }

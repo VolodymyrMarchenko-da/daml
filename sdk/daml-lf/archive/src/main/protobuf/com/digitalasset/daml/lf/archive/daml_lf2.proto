@@ -180,10 +180,12 @@ enum BuiltinType {
   ARROW = 16;
   // Builtin type 'Update'
   UPDATE = 17;
-
+  // Builtin type for FailureCategory
+  FAILURE_CATEGORY = 18;
   // Builtin type 'TTextMap`
-  // *Available in versions >= 2.dev*
-  TEXTMAP = 1001;
+  TEXTMAP = 19;
+
+  // We use fields above 1000 for dev features
   // Builtin type 'TBigNumeric'
   // *Available in versions >= 2.dev*
   BIGNUMERIC = 1002;
@@ -344,19 +346,21 @@ enum BuiltinFunction {
   GENMAP_VALUES = 57;
   GENMAP_SIZE = 58;
 
+  TEXTMAP_EMPTY = 60;
+  TEXTMAP_INSERT = 61;
+  TEXTMAP_LOOKUP = 62;
+  TEXTMAP_DELETE = 63;
+  TEXTMAP_TO_LIST = 64;
+  TEXTMAP_SIZE = 65;
+
   ANY_EXCEPTION_MESSAGE = 59;
 
-  // Next id is 60.
+  FAIL_WITH_STATUS = 66;
+
+  // Next id is 67.
 
   /* Dev Builtins */
-
-
-  TEXTMAP_EMPTY = 1001;                // *Available in versions >= 2.dev*
-  TEXTMAP_INSERT = 1002;               // *Available in versions >= 2.dev*
-  TEXTMAP_LOOKUP = 1003;               // *Available in versions >= 2.dev*
-  TEXTMAP_DELETE = 1004;               // *Available in versions >= 2.dev*
-  TEXTMAP_TO_LIST = 1005;              // *Available in versions >= 2.dev*
-  TEXTMAP_SIZE = 1006;                 // *Available in versions >= 2.dev*
+  // We use fields above 1000 for dev features
 
   SCALE_BIGNUMERIC = 2001;             // *Available in versions >= 2.dev*
   PRECISION_BIGNUMERIC = 2002;         // *Available in versions >= 2.dev*
@@ -373,6 +377,8 @@ enum BuiltinFunction {
 
   KECCAK256_TEXT = 4000;               // *Available in versions >= 2.dev*
   SECP256K1_BOOL = 4001;               // *Available in versions >= 2.dev*
+  HEX_TO_TEXT = 4002;                  // *Available in versions >= 2.dev*
+  TEXT_TO_HEX = 4003;                  // *Available in versions >= 2.dev*
 }
 
 // Builtin literals
@@ -391,6 +397,11 @@ message BuiltinLit {
     UNNECESSARY = 7;
   }
 
+  enum FailureCategory {
+    INVALID_INDEPENDENT_OF_SYSTEM_STATE = 0;
+    INVALID_GIVEN_CURRENT_SYSTEM_STATE_OTHER = 1;
+  }
+
   oneof Sum {
     //  64-bit integer literal ('LitInt64')
     sint64 int64 = 1;
@@ -402,6 +413,8 @@ message BuiltinLit {
     int32 text_interned_str = 4;
     // *Must be a valid date*
     int32 date = 5;
+    // *Failure category for failWithStatus*
+    FailureCategory failure_category = 6;
     // rounding mode for arithmetic operation
     // *Available in versions >= 2.dev*
     RoundingMode rounding_mode = 1001;
@@ -1115,6 +1128,8 @@ message Update {
     CreateInterface create_interface = 12;
     ExerciseInterface exercise_interface = 13;
     FetchInterface fetch_interface = 14;
+
+    Expr ledger_time_lt = 15;
 
     DynamicExercise dynamic_exercise = 1001; // *Available in versions >= 2.dev*
     SoftFetch soft_fetch = 1002; // *Available in versions >= 2.dev*

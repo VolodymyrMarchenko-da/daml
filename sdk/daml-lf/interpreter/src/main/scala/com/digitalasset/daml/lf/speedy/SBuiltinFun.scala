@@ -6,6 +6,7 @@ package speedy
 
 import com.daml.nameof.NameOf
 import com.daml.scalautil.Statement.discard
+import com.digitalasset.daml.lf.crypto.Hash.hashContractInstance
 import com.digitalasset.daml.lf.data.Numeric.Scale
 import com.digitalasset.daml.lf.data.Ref._
 import com.digitalasset.daml.lf.data._
@@ -32,6 +33,7 @@ import com.digitalasset.daml.lf.transaction.{
 }
 import com.digitalasset.daml.lf.value.{Value => V}
 
+import java.nio.charset.StandardCharsets
 import java.security.{
   InvalidKeyException,
   KeyFactory,
@@ -592,11 +594,8 @@ private[lf] object SBuiltinFun {
       } catch {
         case _: IllegalArgumentException =>
           Control.Error(
-            IE.Dev(
-              NameOf.qualifiedNameOfCurrentFunc,
-              IE.Dev.CCTP(
-                IE.Dev.CCTP.MalformedByteEncoding(getSText(args, 0), "can not parse hex string")
-              ),
+            IE.CCTP(
+              IE.CCTP.MalformedByteEncoding(getSText(args, 0), "can not parse hex string")
             )
           )
       }
@@ -614,42 +613,33 @@ private[lf] object SBuiltinFun {
             .fromString(getSText(args, 0))
             .left
             .map(_ =>
-              IE.Dev(
-                NameOf.qualifiedNameOfCurrentFunc,
-                IE.Dev.CCTP(
-                  IE.Dev.CCTP.MalformedByteEncoding(
-                    getSText(args, 0),
-                    cause = "can not parse signature hex string",
-                  )
-                ),
+              IE.CCTP(
+                IE.CCTP.MalformedByteEncoding(
+                  getSText(args, 0),
+                  cause = "can not parse signature hex string",
+                )
               )
             )
           message <- Ref.HexString
             .fromString(getSText(args, 1))
             .left
             .map(_ =>
-              IE.Dev(
-                NameOf.qualifiedNameOfCurrentFunc,
-                IE.Dev.CCTP(
-                  IE.Dev.CCTP.MalformedByteEncoding(
-                    getSText(args, 1),
-                    cause = "can not parse message hex string",
-                  )
-                ),
+              IE.CCTP(
+                IE.CCTP.MalformedByteEncoding(
+                  getSText(args, 1),
+                  cause = "can not parse message hex string",
+                )
               )
             )
           derEncodedPublicKey <- Ref.HexString
             .fromString(getSText(args, 2))
             .left
             .map(_ =>
-              IE.Dev(
-                NameOf.qualifiedNameOfCurrentFunc,
-                IE.Dev.CCTP(
-                  IE.Dev.CCTP.MalformedByteEncoding(
-                    getSText(args, 2),
-                    cause = "can not parse DER encoded public key hex string",
-                  )
-                ),
+              IE.CCTP(
+                IE.CCTP.MalformedByteEncoding(
+                  getSText(args, 2),
+                  cause = "can not parse DER encoded public key hex string",
+                )
               )
             )
           publicKey = extractPublicKey(derEncodedPublicKey)
@@ -665,23 +655,20 @@ private[lf] object SBuiltinFun {
           crash("BouncyCastle provider fails to support SECP256K1")
         case exn: InvalidKeyException =>
           Control.Error(
-            IE.Dev(
-              NameOf.qualifiedNameOfCurrentFunc,
-              IE.Dev.CCTP(IE.Dev.CCTP.MalformedKey(getSText(args, 2), exn.getMessage)),
+            IE.CCTP(
+              IE.CCTP.MalformedKey(getSText(args, 2), exn.getMessage)
             )
           )
         case exn: InvalidKeySpecException =>
           Control.Error(
-            IE.Dev(
-              NameOf.qualifiedNameOfCurrentFunc,
-              IE.Dev.CCTP(IE.Dev.CCTP.MalformedKey(getSText(args, 2), exn.getMessage)),
+            IE.CCTP(
+              IE.CCTP.MalformedKey(getSText(args, 2), exn.getMessage)
             )
           )
         case exn: SignatureException =>
           Control.Error(
-            IE.Dev(
-              NameOf.qualifiedNameOfCurrentFunc,
-              IE.Dev.CCTP(IE.Dev.CCTP.MalformedSignature(getSText(args, 0), exn.getMessage)),
+            IE.CCTP(
+              IE.CCTP.MalformedSignature(getSText(args, 0), exn.getMessage)
             )
           )
       }
@@ -693,6 +680,39 @@ private[lf] object SBuiltinFun {
       val byteEncodedPublicKey = Ref.HexString.decode(hexEncodedPublicKey).toByteArray
 
       KeyFactory.getInstance("EC").generatePublic(new X509EncodedKeySpec(byteEncodedPublicKey))
+    }
+  }
+
+  final case object SBDecodeHex extends SBuiltinFun(1) {
+    override private[speedy] def execute[Q](
+        args: util.ArrayList[SValue],
+        machine: Machine[Q],
+    ): Control[Q] = {
+      try {
+        val hexArg = Ref.HexString.assertFromString(getSText(args, 0))
+        val arg = new String(Ref.HexString.decode(hexArg).toByteArray, StandardCharsets.UTF_8)
+
+        Control.Value(SText(arg))
+      } catch {
+        case _: IllegalArgumentException =>
+          Control.Error(
+            IE.CCTP(
+              IE.CCTP.MalformedByteEncoding(
+                getSText(args, 0),
+                cause = "can not parse hex string argument",
+              )
+            )
+          )
+      }
+    }
+  }
+
+  final case object SBEncodeHex extends SBuiltinPure(1) {
+    override private[speedy] def executePure(args: util.ArrayList[SValue]): SValue = {
+      val arg = getSText(args, 0)
+      val hexArg = Ref.HexString.encode(Bytes.fromByteArray(arg.getBytes(StandardCharsets.UTF_8)))
+
+      SText(hexArg)
     }
   }
 
@@ -1130,7 +1150,7 @@ private[lf] object SBuiltinFun {
         allowCatchingContractInfoErrors = false,
       ) { contract =>
         val templateVersion = machine.tmplId2TxVersion(templateId)
-        val (pkgName, _) = machine.tmplId2PackageNameVersion(templateId)
+        val pkgName = machine.tmplId2PackageName(templateId)
         val interfaceVersion = interfaceId.map(machine.tmplId2TxVersion)
         val exerciseVersion = interfaceVersion.fold(templateVersion)(_.max(templateVersion))
         val chosenValue = args.get(0).toNormalizedValue(exerciseVersion)
@@ -1255,75 +1275,48 @@ private[lf] object SBuiltinFun {
       coid: V.ContractId,
       interfaceId: TypeConName,
   )(k: SAny => Control[Question.Update]): Control[Question.Update] = {
-    hardFetchTemplate(machine, coid) { srcContract =>
-      val pkgName = srcContract.packageName
-      val srcTplId = srcContract.templateId
-      val srcArg = srcContract.value.asInstanceOf[SRecord]
-      ensureTemplateImplementsInterface(machine, interfaceId, coid, srcTplId) {
-        viewInterface(machine, interfaceId, srcTplId, srcArg) { srcView =>
-          resolvePackageName(machine, pkgName) { pkgId =>
-            val dstTplId = srcTplId.copy(packageId = pkgId)
-            machine.ensurePackageIsLoaded(
-              dstTplId.packageId,
-              language.Reference.Template(dstTplId),
-            ) { () =>
-              ensureTemplateImplementsInterface(machine, interfaceId, coid, dstTplId) {
-                fromInterface(machine, srcTplId, srcArg, dstTplId) {
-                  case None =>
-                    Control.Error(IE.WronglyTypedContract(coid, dstTplId, srcTplId))
-                  case Some(dstArg) =>
-                    viewInterface(machine, interfaceId, dstTplId, dstArg) { dstView =>
-                      executeExpression(machine, SEPreventCatch(srcView)) { srcViewValue =>
-                        getContractInfo(
-                          machine,
-                          coid,
-                          dstTplId,
-                          dstArg,
-                          allowCatchingContractInfoErrors = false,
-                        ) { dstContract =>
-                          // If the destination and src templates are the same, we skip the computation
-                          // of the destination template's view and the validation of the contract info.
-                          if (dstTplId == srcTplId)
-                            k(SAny(Ast.TTyCon(dstTplId), dstArg))
-                          else
-                            checkContractUpgradable(coid, srcContract, dstContract) { () =>
-                              executeExpression(machine, SEPreventCatch(dstView)) { dstViewValue =>
-                                if (srcViewValue != dstViewValue) {
-                                  Control.Error(
-                                    IE.Upgrade(
-                                      IE.Upgrade.ViewMismatch(
-                                        coid,
-                                        interfaceId,
-                                        srcTplId,
-                                        dstTplId,
-                                        srcView = srcViewValue.toUnnormalizedValue,
-                                        dstView = dstViewValue.toUnnormalizedValue,
-                                      )
-                                    )
-                                  )
-                                } else
-                                  k(SAny(Ast.TTyCon(dstTplId), dstArg))
-                              }
-                            }
-                        }
-                      }
-                    }
-                }
+    fetchSourceContractId(machine, coid)({ case (_, srcContract) =>
+      ensureContractActive(machine, coid, srcContract.templateId) {
+        machine.checkContractVisibility(coid, srcContract)
+        machine.enforceLimitAddInputContract()
+        machine.enforceLimitSignatoriesAndObservers(coid, srcContract)
+        val srcTmplId = srcContract.templateId
+        val pkgName = srcContract.packageName
+        val srcArg = srcContract.value.asInstanceOf[SRecord]
+        resolvePackageName(machine, pkgName) { pkgId =>
+          val dstTmplId = srcTmplId.copy(packageId = pkgId)
+          machine.ensurePackageIsLoaded(
+            dstTmplId.packageId,
+            language.Reference.Template(dstTmplId),
+          ) { () =>
+            ensureTemplateImplementsInterface(machine, interfaceId, coid, dstTmplId) {
+              fromInterface(machine, srcTmplId, srcArg, dstTmplId) {
+                case None =>
+                  Control.Error(IE.WronglyTypedContract(coid, dstTmplId, srcTmplId))
+                case Some(dstArg) =>
+                  fetchValidateDstContract(
+                    machine,
+                    coid,
+                    srcTmplId,
+                    srcContract,
+                    dstTmplId,
+                    dstArg,
+                  )({ case (dstTmplId, dstArg, _) =>
+                    k(SAny(Ast.TTyCon(dstTmplId), dstArg))
+                  })
               }
             }
           }
         }
       }
-    }
+    })
   }
 
   private[this] def resolvePackageName[Q](machine: UpdateMachine, pkgName: Ref.PackageName)(
       k: PackageId => Control[Q]
   ): Control[Q] = {
     machine.packageResolution.get(pkgName) match {
-      // TODO https://github.com/digital-asset/daml/issues/17995
-      //  We need a proper interpretation error here
-      case None => crash(s"cannot resolve package $pkgName")
+      case None => Control.Error(IE.UnresolvedPackageName(pkgName))
       case Some(pkgId) => k(pkgId)
     }
   }
@@ -1428,13 +1421,11 @@ private[lf] object SBuiltinFun {
         args: util.ArrayList[SValue],
         machine: Machine[Q],
     ): Control.Expression = {
-      val txVersion = machine.tmplId2TxVersion(interfaceId)
       val e = SEBuiltinFun(
         SBUInsertFetchNode(
           getSAnyContract(args, 0)._1,
           byKey = false,
-          interfaceId =
-            Option.when(txVersion >= TransactionVersion.minFetchInterfaceId)(interfaceId),
+          interfaceId = Some(interfaceId),
         )
       )
       Control.Expression(e)
@@ -1495,8 +1486,8 @@ private[lf] object SBuiltinFun {
     if (dstTplId == srcTplId) {
       k(Some(srcArg))
     } else if (dstTplId.qualifiedName == srcTplId.qualifiedName) {
-      val (srcPkgName, _) = machine.tmplId2PackageNameVersion(dstTplId)
-      val (dstPkgName, _) = machine.tmplId2PackageNameVersion(srcTplId)
+      val srcPkgName = machine.tmplId2PackageName(dstTplId)
+      val dstPkgName = machine.tmplId2PackageName(srcTplId)
       if (srcPkgName == dstPkgName) {
         // This isn't ideal as its a large uncached computation in a non Update primative.
         // Ideally this would run in Update, and not iterate the value twice
@@ -1684,7 +1675,7 @@ private[lf] object SBuiltinFun {
         machine: UpdateMachine,
     ): Control[Nothing] = {
       val keyVersion = machine.tmplId2TxVersion(templateId)
-      val (pkgName, _) = machine.tmplId2PackageNameVersion(templateId)
+      val pkgName = machine.tmplId2PackageName(templateId)
       val cachedKey =
         extractKey(NameOf.qualifiedNameOfCurrentFunc, keyVersion, pkgName, templateId, args.get(0))
       val mbCoid = args.get(1) match {
@@ -1764,7 +1755,7 @@ private[lf] object SBuiltinFun {
 
       val keyValue = args.get(0)
       val version = machine.tmplId2TxVersion(templateId)
-      val (pkgName, _) = machine.tmplId2PackageNameVersion(templateId)
+      val pkgName = machine.tmplId2PackageName(templateId)
       val cachedKey =
         extractKey(NameOf.qualifiedNameOfCurrentFunc, version, pkgName, templateId, keyValue)
       if (cachedKey.maintainers.isEmpty) {
@@ -1857,7 +1848,21 @@ private[lf] object SBuiltinFun {
         machine: UpdateMachine,
     ): Control[Question.Update] = {
       checkToken(args, 0)
-      machine.needTime()
+      machine.needTime(time => Control.Value(STimestamp(time)))
+    }
+  }
+
+  /** $ledgerTimeLT: Timestamp -> Token -> Bool */
+  final case object SBULedgerTimeLT extends UpdateBuiltin(2) {
+    override protected def executeUpdate(
+        args: util.ArrayList[SValue],
+        machine: UpdateMachine,
+    ): Control[Question.Update] = {
+      checkToken(args, 1)
+
+      val time = getSTimestamp(args, 0)
+
+      machine.needTime(now => Control.Value(SBool(now < time)))
     }
   }
 
@@ -2090,6 +2095,28 @@ private[lf] object SBuiltinFun {
 
   }
 
+  /** $failWithStatus :: Text -> FailureCategory (Int64) -> Text -> TextMap Text -> a */
+  final case object SBFailWithStatus extends SBuiltinFun(4) {
+    override private[speedy] def execute[Q](
+        args: util.ArrayList[SValue],
+        machine: Machine[Q],
+    ): Control[Nothing] = {
+      val errorId = getSText(args, 0)
+      val categoryId = getSInt64(args, 1)
+      val errorMessage = getSText(args, 2)
+      val meta = getSMap(args, 3) match {
+        case smap @ SMap(true, treeMap) =>
+          treeMap.toMap.map {
+            case (SText(key), SText(value)) => (key, value)
+            case _ => unexpectedType(0, "TextMap Text", smap)
+          }
+        case otherwise => unexpectedType(0, "TextMap Text", otherwise)
+      }
+
+      Control.Error(IE.FailureStatus(errorId, categoryId.toInt, errorMessage, meta))
+    }
+  }
+
   object SBExperimental {
 
     private object SBExperimentalAnswer extends SBuiltinFun(1) {
@@ -2128,16 +2155,36 @@ private[lf] object SBuiltinFun {
       val contractInfoStruct = args.get(0)
       val contractInfo = extractContractInfo(
         machine.tmplId2TxVersion,
-        machine.tmplId2PackageNameVersion,
+        machine.tmplId2PackageName,
         contractInfoStruct,
       )
       val recomputed = contractInfo.toCreateNode(contract.contractId)
       val provided = contract.toCreateNode
-      if (provided != recomputed) {
-        val mismatchingFields =
-          provided.productElementNames.zipWithIndex.collect {
-            case (field, i) if provided.productElement(i) != recomputed.productElement(i) => field
-          }
+      val mismatchingFields =
+        provided.productElementNames.zipWithIndex.flatMap {
+          // Because [recomputed] was obtained by creating a normal value out of the svalue obtained by translating the
+          // original contract, the following line is basically testing that
+          // translateValue(arg, typ).toNormalizedValue == arg modulo None values.
+          // It would seem as if that's a law that should hold for all args, and thus doesn't need testing. But this is
+          // not the case: if arg contains a numeric value that is not in normal form w.r.t. its scale
+          // (e.g. 1.12 of scale 5), then the renormalized value will be different from the original one.
+          // We want to catch and rejects such cases. The only difference we want to allow is for Nones to be dropped.
+          case ("arg", _) =>
+            Option.when(
+              hashContractInstance(
+                provided.packageName,
+                provided.templateId,
+                provided.arg,
+              ) != hashContractInstance(
+                recomputed.packageName,
+                recomputed.templateId,
+                recomputed.arg,
+              )
+            )("arg")
+          case (field, i) =>
+            Option.when(provided.productElement(i) != recomputed.productElement(i))(field)
+        }
+      if (mismatchingFields.nonEmpty) {
         Control.Error(
           IE.Dev(
             NameOf.qualifiedNameOfCurrentFunc,
@@ -2265,7 +2312,7 @@ private[lf] object SBuiltinFun {
 
   private def extractContractInfo(
       tmplId2TxVersion: TypeConName => TransactionVersion,
-      tmplId2PackageNameVersion: TypeConName => (PackageName, Option[PackageVersion]),
+      tmplId2PackageName: TypeConName => PackageName,
       contractInfoStruct: SValue,
   ): ContractInfo = {
     contractInfoStruct match {
@@ -2279,7 +2326,7 @@ private[lf] object SBuiltinFun {
             )
         }
         val version = tmplId2TxVersion(templateId)
-        val (pkgName, pkgVer) = tmplId2PackageNameVersion(templateId)
+        val pkgName = tmplId2PackageName(templateId)
         val mbKey = vals.get(contractInfoStructKeyIdx) match {
           case SOptional(mbKey) =>
             mbKey.map(
@@ -2294,7 +2341,6 @@ private[lf] object SBuiltinFun {
         ContractInfo(
           version = version,
           packageName = pkgName,
-          packageVersion = pkgVer,
           templateId = templateId,
           value = vals.get(contractInfoStructArgIdx),
           signatories = extractParties(
@@ -2317,48 +2363,75 @@ private[lf] object SBuiltinFun {
       dstTmplId: TypeConName,
       coid: V.ContractId,
   )(f: SValue => Control[Question.Update]): Control[Question.Update] = {
-    def importContract(srcContract: ContractInfo) = {
+    fetchSourceContractId(machine, coid) { case (localTemplateArg, srcContract) =>
       val srcTmplId = srcContract.templateId
-      if (srcTmplId.qualifiedName != dstTmplId.qualifiedName)
-        Control.Error(
-          IE.WronglyTypedContract(coid, dstTmplId, srcTmplId)
-        )
-      else
-        machine.ensurePackageIsLoaded(
-          dstTmplId.packageId,
-          language.Reference.Template(dstTmplId),
-        ) { () =>
-          importValue(machine, dstTmplId, srcContract.arg) { templateArg =>
-            getContractInfo(
-              machine,
-              coid,
-              dstTmplId,
-              templateArg,
-              allowCatchingContractInfoErrors = false,
-            ) { dstContract =>
-              ensureContractActive(machine, coid, dstContract.templateId) {
-
-                machine.checkContractVisibility(coid, dstContract)
-                machine.enforceLimitAddInputContract()
-                machine.enforceLimitSignatoriesAndObservers(coid, dstContract)
-
-                // In Validation mode, we always call validateContractInfo
-                // In Submission mode, we only call validateContractInfo when src != dest
-                val needValidationCall: Boolean =
-                  machine.validating || srcTmplId.packageId != dstTmplId.packageId
-                if (needValidationCall) {
-                  checkContractUpgradable(coid, srcContract, dstContract) { () =>
+      localTemplateArg match {
+        // If the local contract has the same package ID as the target template ID, then we don't need to
+        // import its value and validate its contract info again.
+        case Some(localTemplateArg) if (srcTmplId == dstTmplId) =>
+          f(localTemplateArg)
+        case _ =>
+          if (srcTmplId.qualifiedName != dstTmplId.qualifiedName)
+            Control.Error(
+              IE.WronglyTypedContract(coid, dstTmplId, srcTmplId)
+            )
+          else
+            machine.ensurePackageIsLoaded(
+              dstTmplId.packageId,
+              language.Reference.Template(dstTmplId),
+            ) { () =>
+              importValue(
+                machine,
+                dstTmplId,
+                srcContract.arg,
+              )(dstArg =>
+                fetchValidateDstContract(machine, coid, srcTmplId, srcContract, dstTmplId, dstArg)({
+                  case (_, _, dstContract) =>
                     f(dstContract.value)
-                  }
-                } else {
-                  f(dstContract.value)
-                }
-              }
+                })
+              )
             }
+      }
+    }
+  }
+
+  private def fetchValidateDstContract(
+      machine: UpdateMachine,
+      coid: V.ContractId,
+      srcTmplId: TypeConName,
+      srcContract: ContractInfo,
+      dstTmplId: TypeConName,
+      dstTmplArg: SValue,
+  )(k: (TypeConName, SValue, ContractInfo) => Control[Question.Update]): Control[Question.Update] =
+    getContractInfo(
+      machine,
+      coid,
+      dstTmplId,
+      dstTmplArg,
+      allowCatchingContractInfoErrors = false,
+    ) { dstContract =>
+      ensureContractActive(machine, coid, dstContract.templateId) {
+        machine.checkContractVisibility(coid, dstContract)
+        machine.enforceLimitAddInputContract()
+        machine.enforceLimitSignatoriesAndObservers(coid, dstContract)
+        // In Validation mode, we always call validateContractInfo
+        // In Submission mode, we only call validateContractInfo when src != dest
+        val needValidationCall: Boolean =
+          machine.validating || srcTmplId.packageId != dstTmplId.packageId
+        if (needValidationCall) {
+          checkContractUpgradable(coid, srcContract, dstContract) { () =>
+            k(dstTmplId, dstTmplArg, dstContract)
           }
+        } else {
+          k(dstTmplId, dstTmplArg, dstContract)
         }
+      }
     }
 
+  private def fetchSourceContractId(
+      machine: UpdateMachine,
+      coid: V.ContractId,
+  )(f: (Option[SValue], ContractInfo) => Control[Question.Update]): Control[Question.Update] = {
     machine.getIfLocalContract(coid) match {
       case Some((srcTmplId, templateArg)) =>
         ensureContractActive(machine, coid, srcTmplId) {
@@ -2368,14 +2441,7 @@ private[lf] object SBuiltinFun {
             srcTmplId,
             templateArg,
             allowCatchingContractInfoErrors = false,
-          ) { contract =>
-            // If the local contract has the same package ID as the target template ID, then we don't need to
-            // import its value and validate its contract info again.
-            if (srcTmplId == dstTmplId)
-              f(templateArg)
-            else
-              importContract(contract)
-          }
+          )(f(Some(templateArg), _))
         }
       case None =>
         machine.lookupContract(coid)(coinst =>
@@ -2390,7 +2456,7 @@ private[lf] object SBuiltinFun {
                 coinst.template,
                 templateArg,
                 allowCatchingContractInfoErrors = false,
-              )(importContract)
+              )(f(None, _))
             }
           }
         )
@@ -2434,51 +2500,6 @@ private[lf] object SBuiltinFun {
             )
           )
         )
-    }
-  }
-
-  /** A version of [[fetchTemplate]] without a destination template type. The template type of the contract on ledger
-    * is used for importing its value, and is returned alongside the value.
-    */
-  private def hardFetchTemplate(
-      machine: UpdateMachine,
-      coid: V.ContractId,
-  )(k: ContractInfo => Control[Question.Update]): Control[Question.Update] = {
-    machine.getIfLocalContract(coid) match {
-      case Some((templateId, templateArg)) =>
-        ensureContractActive(machine, coid, templateId) {
-          getContractInfo(
-            machine,
-            coid,
-            templateId,
-            templateArg,
-            allowCatchingContractInfoErrors = false,
-          )(k)
-        }
-      case None =>
-        machine.lookupContract(coid) { case V.ContractInstance(_, _, srcTmplId, coinstArg) =>
-          machine.ensurePackageIsLoaded(
-            srcTmplId.packageId,
-            language.Reference.Template(srcTmplId),
-          ) { () =>
-            importValue(machine, srcTmplId, coinstArg) { templateArg =>
-              getContractInfo(
-                machine,
-                coid,
-                srcTmplId,
-                templateArg,
-                allowCatchingContractInfoErrors = false,
-              ) { contract =>
-                ensureContractActive(machine, coid, contract.templateId) {
-                  machine.checkContractVisibility(coid, contract)
-                  machine.enforceLimitAddInputContract()
-                  machine.enforceLimitSignatoriesAndObservers(coid, contract)
-                  k(contract)
-                }
-              }
-            }
-          }
-        }
     }
   }
 
@@ -2533,7 +2554,7 @@ private[lf] object SBuiltinFun {
       contractInfoStruct =>
         val contract = extractContractInfo(
           machine.tmplId2TxVersion,
-          machine.tmplId2PackageNameVersion,
+          machine.tmplId2PackageName,
           contractInfoStruct,
         )
         f(contract)

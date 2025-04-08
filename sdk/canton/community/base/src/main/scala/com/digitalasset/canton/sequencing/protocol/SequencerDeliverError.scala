@@ -3,17 +3,19 @@
 
 package com.digitalasset.canton.sequencing.protocol
 
-import com.daml.error.*
+import com.digitalasset.base.error.{
+  Alarm,
+  AlarmErrorCode,
+  ErrorCategory,
+  ErrorClass,
+  ErrorCode,
+  Explanation,
+  Resolution,
+}
 import com.digitalasset.canton.SequencerCounter
 import com.digitalasset.canton.data.CantonTimestamp
 import com.digitalasset.canton.error.CantonErrorGroups.SequencerErrorGroup
-import com.digitalasset.canton.error.{
-  Alarm,
-  AlarmErrorCode,
-  BaseCantonError,
-  TransactionError,
-  TransactionErrorImpl,
-}
+import com.digitalasset.canton.error.{CantonBaseError, TransactionError, TransactionErrorImpl}
 import com.digitalasset.canton.networking.grpc.GrpcError
 import com.digitalasset.canton.topology.Member
 import com.google.rpc.status.Status
@@ -38,7 +40,7 @@ sealed abstract class SequencerDeliverErrorCode(id: String, category: ErrorCateg
   /** Match the GRPC status on the ErrorCode and return the message string on success
     */
   def unapply(rpcStatus: Status): Option[String] =
-    BaseCantonError.extractStatusErrorCodeMessage(this, rpcStatus)
+    CantonBaseError.extractStatusErrorCodeMessage(this, rpcStatus)
 
   def unapply(grpcError: GrpcError): Option[String] =
     grpcError.decodedCantonError.flatMap(status =>

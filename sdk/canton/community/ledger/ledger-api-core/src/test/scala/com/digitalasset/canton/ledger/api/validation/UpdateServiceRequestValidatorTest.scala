@@ -3,11 +3,9 @@
 
 package com.digitalasset.canton.ledger.api.validation
 
-import com.daml.error.{ContextualizedErrorLogger, NoLogging}
 import com.daml.ledger.api.v2.transaction_filter.CumulativeFilter.IdentifierFilter
 import com.daml.ledger.api.v2.transaction_filter.{
   CumulativeFilter as ProtoCumulativeFilter,
-  Filters,
   InterfaceFilter as ProtoInterfaceFilter,
   TemplateFilter as ProtoTemplateFilter,
   *,
@@ -19,6 +17,7 @@ import com.daml.ledger.api.v2.update_service.{
 }
 import com.daml.ledger.api.v2.value.Identifier
 import com.digitalasset.canton.ledger.api.{CumulativeFilter, InterfaceFilter, TemplateFilter}
+import com.digitalasset.canton.logging.{ContextualizedErrorLogger, NoLogging}
 import com.digitalasset.daml.lf.data.Ref
 import com.digitalasset.daml.lf.data.Ref.TypeConRef
 import io.grpc.Status.Code.*
@@ -44,7 +43,9 @@ class UpdateServiceRequestValidatorTest
               templateIdsForParty
                 .map(tId =>
                   ProtoCumulativeFilter(
-                    IdentifierFilter.TemplateFilter(ProtoTemplateFilter(Some(tId)))
+                    IdentifierFilter.TemplateFilter(
+                      ProtoTemplateFilter(Some(tId), includeCreatedEventBlob = false)
+                    )
                   )
                 )
                 ++
@@ -66,10 +67,12 @@ class UpdateServiceRequestValidatorTest
                     )
                   )
             )
-        )
+        ),
+        None,
       )
     ),
     verbose = verbose,
+    updateFormat = None,
   )
 
   private def getFiltersByParty(templateIdsForParty: Seq[Identifier]): Map[String, Filters] =
@@ -79,7 +82,9 @@ class UpdateServiceRequestValidatorTest
           templateIdsForParty
             .map(tId =>
               ProtoCumulativeFilter(
-                IdentifierFilter.TemplateFilter(ProtoTemplateFilter(Some(tId)))
+                IdentifierFilter.TemplateFilter(
+                  ProtoTemplateFilter(Some(tId), includeCreatedEventBlob = false)
+                )
               )
             )
             ++
@@ -110,6 +115,8 @@ class UpdateServiceRequestValidatorTest
     GetUpdatesRequest(
       beginExclusive = 0L,
       endInclusive = Some(offsetLong),
+      filter = None,
+      verbose = false,
       updateFormat = Some(
         UpdateFormat(
           includeTransactions = transactionTemplateIdsO
@@ -119,6 +126,7 @@ class UpdateServiceRequestValidatorTest
                 eventFormat = Some(
                   EventFormat(
                     filtersByParty = filtersByParty,
+                    filtersForAnyParty = None,
                     verbose = verbose,
                   )
                 ),
@@ -127,7 +135,14 @@ class UpdateServiceRequestValidatorTest
             ),
           includeReassignments = reassignmentsTemplateIdsO
             .map(getFiltersByParty)
-            .map(filtersByParty => EventFormat(filtersByParty = filtersByParty)),
+            .map(filtersByParty =>
+              EventFormat(
+                filtersByParty = filtersByParty,
+                filtersForAnyParty = None,
+                verbose = false,
+              )
+            ),
+          includeTopologyEvents = None,
         )
       ),
     )
@@ -147,26 +162,40 @@ class UpdateServiceRequestValidatorTest
   )
 
   private val txByOffsetReqLegacy =
-    GetTransactionByOffsetRequest(offsetLong, Seq(party))
+    GetTransactionByOffsetRequest(offsetLong, Seq(party), None)
   private val txByOffsetReq =
     GetTransactionByOffsetRequest(
       offset = offsetLong,
+      requestingParties = Nil,
       transactionFormat = Some(
         TransactionFormat(
-          eventFormat = Some(EventFormat(filtersByParty = Map(party -> Filters()))),
+          eventFormat = Some(
+            EventFormat(
+              filtersByParty = Map(party -> Filters(Nil)),
+              filtersForAnyParty = None,
+              verbose = false,
+            )
+          ),
           transactionShape = TransactionShape.TRANSACTION_SHAPE_ACS_DELTA,
         )
       ),
     )
 
   private val txByIdReqLegacy =
-    GetTransactionByIdRequest(updateId, Seq(party))
+    GetTransactionByIdRequest(updateId, Seq(party), None)
   private val txByIdReq =
     GetTransactionByIdRequest(
       updateId = updateId,
+      requestingParties = Nil,
       transactionFormat = Some(
         TransactionFormat(
-          eventFormat = Some(EventFormat(filtersByParty = Map(party -> Filters()))),
+          eventFormat = Some(
+            EventFormat(
+              filtersByParty = Map(party -> Filters(Nil)),
+              filtersForAnyParty = None,
+              verbose = false,
+            )
+          ),
           transactionShape = TransactionShape.TRANSACTION_SHAPE_ACS_DELTA,
         )
       ),
@@ -260,7 +289,13 @@ class UpdateServiceRequestValidatorTest
               p -> f.update(
                 _.cumulative := Seq(
                   ProtoCumulativeFilter(
-                    IdentifierFilter.InterfaceFilter(ProtoInterfaceFilter(None, true))
+                    IdentifierFilter.InterfaceFilter(
+                      ProtoInterfaceFilter(
+                        None,
+                        includeInterfaceView = true,
+                        includeCreatedEventBlob = false,
+                      )
+                    )
                   )
                 )
               )
@@ -373,12 +408,13 @@ class UpdateServiceRequestValidatorTest
                         Seq(
                           ProtoCumulativeFilter(
                             IdentifierFilter.TemplateFilter(
-                              ProtoTemplateFilter(Some(templateId), true)
+                              ProtoTemplateFilter(Some(templateId), includeCreatedEventBlob = true)
                             )
                           )
                         )
                   )
-                )
+                ),
+                None,
               )
             )
           ),
@@ -393,7 +429,7 @@ class UpdateServiceRequestValidatorTest
                 templateFilters = Set(
                   TemplateFilter(
                     TypeConRef.assertFromString("packageId:includedModule:includedTemplate"),
-                    true,
+                    includeCreatedEventBlob = true,
                   )
                 ),
                 interfaceFilters = Set(
@@ -480,7 +516,11 @@ class UpdateServiceRequestValidatorTest
                     _.cumulative := Seq(
                       ProtoCumulativeFilter(
                         IdentifierFilter.InterfaceFilter(
-                          ProtoInterfaceFilter(interfaceId = None, includeInterfaceView = true)
+                          ProtoInterfaceFilter(
+                            interfaceId = None,
+                            includeInterfaceView = true,
+                            includeCreatedEventBlob = false,
+                          )
                         )
                       )
                     )
@@ -760,7 +800,7 @@ class UpdateServiceRequestValidatorTest
                       Seq(
                         ProtoCumulativeFilter(
                           IdentifierFilter.TemplateFilter(
-                            ProtoTemplateFilter(Some(templateId), true)
+                            ProtoTemplateFilter(Some(templateId), includeCreatedEventBlob = true)
                           )
                         )
                       )
@@ -778,7 +818,7 @@ class UpdateServiceRequestValidatorTest
                 templateFilters = Set(
                   TemplateFilter(
                     TypeConRef.assertFromString("packageId:includedModule:includedTemplate"),
-                    true,
+                    includeCreatedEventBlob = true,
                   )
                 ),
                 interfaceFilters = Set(

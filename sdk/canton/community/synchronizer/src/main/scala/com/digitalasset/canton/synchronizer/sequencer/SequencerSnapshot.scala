@@ -26,6 +26,7 @@ final case class SequencerSnapshot(
     lastTs: CantonTimestamp,
     latestBlockHeight: Long,
     heads: Map[Member, SequencerCounter],
+    previousTimestamps: Map[Member, Option[CantonTimestamp]],
     status: SequencerPruningStatus,
     inFlightAggregations: InFlightAggregations,
     additional: Option[SequencerSnapshot.ImplementationSpecificInfo],
@@ -41,7 +42,10 @@ final case class SequencerSnapshot(
     def serializeInFlightAggregation(
         args: (AggregationId, InFlightAggregation)
     ): v30.SequencerSnapshot.InFlightAggregationWithId = {
-      val (aggregationId, InFlightAggregation(aggregatedSenders, maxSequencingTime, rule)) = args
+      val (
+        aggregationId,
+        InFlightAggregation(aggregatedSenders, _firstSequencingTimestamp, maxSequencingTime, rule),
+      ) = args
       v30.SequencerSnapshot.InFlightAggregationWithId(
         aggregationId.toProtoPrimitive,
         Some(rule.toProtoV30),
@@ -74,6 +78,12 @@ final case class SequencerSnapshot(
         additional.map(a => v30.ImplementationSpecificInfo(a.implementationName, a.info)),
       trafficPurchased = trafficPurchased.map(_.toProtoV30),
       trafficConsumed = trafficConsumed.map(_.toProtoV30),
+      memberPreviousTimestamps = previousTimestamps.toSeq.map { case (member, timestamp) =>
+        v30.SequencerSnapshot.MemberPreviousTimestamp(
+          member.toProtoPrimitive,
+          timestamp.map(_.toProtoPrimitive),
+        )
+      },
     )
   }
 
@@ -84,6 +94,7 @@ final case class SequencerSnapshot(
     param("lastTs", _.lastTs),
     param("latestBlockHeight", _.latestBlockHeight),
     param("heads", _.heads),
+    param("previousTimestamps", _.previousTimestamps),
     param("status", _.status),
     param("inFlightAggregations", _.inFlightAggregations),
     param("additional", _.additional),
@@ -117,6 +128,7 @@ object SequencerSnapshot extends VersioningCompanion[SequencerSnapshot] {
       lastTs: CantonTimestamp,
       latestBlockHeight: Long,
       heads: Map[Member, SequencerCounter],
+      previousTimestamps: Map[Member, Option[CantonTimestamp]],
       status: SequencerPruningStatus,
       inFlightAggregations: InFlightAggregations,
       additional: Option[SequencerSnapshot.ImplementationSpecificInfo],
@@ -128,6 +140,7 @@ object SequencerSnapshot extends VersioningCompanion[SequencerSnapshot] {
       lastTs,
       latestBlockHeight,
       heads,
+      previousTimestamps,
       status,
       inFlightAggregations,
       additional,
@@ -183,9 +196,19 @@ object SequencerSnapshot extends VersioningCompanion[SequencerSnapshot] {
               } yield sender -> AggregationBySender(sequencingTimestamp, signatures)
           }
           .map(_.toMap)
+        firstSequencingTimestamp <- aggregatedSenders.values
+          .minByOption(_.sequencingTimestamp)
+          .map(_.sequencingTimestamp)
+          .toRight(
+            ProtoDeserializationError.InvariantViolation(
+              field = Some("aggregatedSenders"),
+              "Aggregated senders must not be empty",
+            )
+          )
         inFlightAggregation <- InFlightAggregation
           .create(
             aggregatedSenders,
+            firstSequencingTimestamp,
             maxSequencingTime,
             aggregationRule,
           )
@@ -200,6 +223,13 @@ object SequencerSnapshot extends VersioningCompanion[SequencerSnapshot] {
           Member
             .fromProtoPrimitive(member, "registeredMembers")
             .map(m => m -> SequencerCounter(counter))
+        }
+        .map(_.toMap)
+      previousTimestamps <- request.memberPreviousTimestamps
+        .traverse { case v30.SequencerSnapshot.MemberPreviousTimestamp(member, timestamp) =>
+          Member
+            .fromProtoPrimitive(member, "registeredMembers")
+            .flatMap(m => timestamp.traverse(CantonTimestamp.fromProtoPrimitive).map(m -> _))
         }
         .map(_.toMap)
       status <- ProtoConverter.parseRequired(
@@ -217,6 +247,7 @@ object SequencerSnapshot extends VersioningCompanion[SequencerSnapshot] {
       lastTs,
       request.lastBlockHeight,
       heads,
+      previousTimestamps,
       status,
       inFlightAggregations,
       request.additional.map(a => ImplementationSpecificInfo(a.implementationName, a.info)),

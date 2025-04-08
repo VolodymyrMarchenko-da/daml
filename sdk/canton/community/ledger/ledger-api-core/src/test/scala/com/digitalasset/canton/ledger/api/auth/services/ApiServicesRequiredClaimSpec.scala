@@ -8,6 +8,8 @@ import com.daml.ledger.api.v2.admin.party_management_service.{
   UpdatePartyDetailsRequest,
 }
 import com.daml.ledger.api.v2.command_completion_service.CompletionStreamRequest
+import com.daml.ledger.api.v2.command_service.SubmitAndWaitForTransactionRequest
+import com.daml.ledger.api.v2.commands.Commands
 import com.daml.ledger.api.v2.event_query_service.GetEventsByContractIdRequest
 import com.daml.ledger.api.v2.state_service.GetActiveContractsRequest
 import com.daml.ledger.api.v2.transaction_filter.TransactionShape.TRANSACTION_SHAPE_ACS_DELTA
@@ -24,6 +26,7 @@ import com.daml.ledger.api.v2.update_service.GetUpdatesRequest
 import com.digitalasset.canton.BaseTest
 import com.digitalasset.canton.auth.RequiredClaim
 import com.digitalasset.canton.ledger.api.auth.RequiredClaims
+import com.digitalasset.canton.ledger.api.auth.services.ApiServicesRequiredClaimSpec.submitAndWaitForTransactionRequest
 import org.scalatest.flatspec.AsyncFlatSpec
 import org.scalatest.matchers.should.Matchers
 import scalapb.lenses.Lens
@@ -35,7 +38,7 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
   it should "compute the correct claims in the happy path" in {
     val result = CommandCompletionServiceAuthorization.completionStreamClaims(
       CompletionStreamRequest(
-        applicationId = "qwe",
+        userId = "qwe",
         parties = Seq("a", "b", "c"),
         beginExclusive = 1234L,
       )
@@ -47,15 +50,15 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
       RequiredClaim.ReadAs[CompletionStreamRequest]("c"),
     )
     result
-      .collectFirst(matchApplicationId)
+      .collectFirst(matchUserId)
       .value
-      .skipApplicationIdValidationForAnyPartyReaders shouldBe true
+      .skipUserIdValidationForAnyPartyReaders shouldBe true
   }
 
   it should "compute the correct claims if empty parties" in {
     val result = CommandCompletionServiceAuthorization.completionStreamClaims(
       CompletionStreamRequest(
-        applicationId = "qwe",
+        userId = "qwe",
         parties = Nil,
         beginExclusive = 1234L,
       )
@@ -63,9 +66,9 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
     result should have size (1)
     result.collect(readAs) shouldBe Nil
     result
-      .collectFirst(matchApplicationId)
+      .collectFirst(matchUserId)
       .value
-      .skipApplicationIdValidationForAnyPartyReaders shouldBe true
+      .skipUserIdValidationForAnyPartyReaders shouldBe true
   }
 
   behavior of "PartyManagementServiceAuthorization.updatePartyDetailsClaims"
@@ -111,11 +114,11 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
         eventFormat = Some(
           EventFormat(
             filtersByParty = Map(
-              "a" -> Filters(),
-              "b" -> Filters(),
-              "c" -> Filters(),
+              "a" -> Filters(Nil),
+              "b" -> Filters(Nil),
+              "c" -> Filters(Nil),
             ),
-            filtersForAnyParty = Some(Filters()),
+            filtersForAnyParty = Some(Filters(Nil)),
             verbose = true,
           )
         ),
@@ -137,9 +140,9 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
         eventFormat = Some(
           EventFormat(
             filtersByParty = Map(
-              "a" -> Filters(),
-              "b" -> Filters(),
-              "c" -> Filters(),
+              "a" -> Filters(Nil),
+              "b" -> Filters(Nil),
+              "c" -> Filters(Nil),
             ),
             filtersForAnyParty = None,
             verbose = true,
@@ -188,11 +191,11 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
         filter = Some(
           TransactionFilter(
             filtersByParty = Map(
-              "1" -> Filters(),
-              "2" -> Filters(),
-              "3" -> Filters(),
+              "1" -> Filters(Nil),
+              "2" -> Filters(Nil),
+              "3" -> Filters(Nil),
             ),
-            filtersForAnyParty = Some(Filters()),
+            filtersForAnyParty = Some(Filters(Nil)),
           )
         ),
         verbose = true,
@@ -200,11 +203,11 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
         eventFormat = Some(
           EventFormat(
             filtersByParty = Map(
-              "a" -> Filters(),
-              "b" -> Filters(),
-              "c" -> Filters(),
+              "a" -> Filters(Nil),
+              "b" -> Filters(Nil),
+              "c" -> Filters(Nil),
             ),
-            filtersForAnyParty = Some(Filters()),
+            filtersForAnyParty = Some(Filters(Nil)),
             verbose = true,
           )
         ),
@@ -228,9 +231,9 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
         filter = Some(
           TransactionFilter(
             filtersByParty = Map(
-              "1" -> Filters(),
-              "2" -> Filters(),
-              "3" -> Filters(),
+              "1" -> Filters(Nil),
+              "2" -> Filters(Nil),
+              "3" -> Filters(Nil),
             ),
             filtersForAnyParty = None,
           )
@@ -240,11 +243,11 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
         eventFormat = Some(
           EventFormat(
             filtersByParty = Map(
-              "a" -> Filters(),
-              "b" -> Filters(),
-              "c" -> Filters(),
+              "a" -> Filters(Nil),
+              "b" -> Filters(Nil),
+              "c" -> Filters(Nil),
             ),
-            filtersForAnyParty = Some(Filters()),
+            filtersForAnyParty = Some(Filters(Nil)),
             verbose = true,
           )
         ),
@@ -267,9 +270,9 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
         filter = Some(
           TransactionFilter(
             filtersByParty = Map(
-              "1" -> Filters(),
-              "2" -> Filters(),
-              "3" -> Filters(),
+              "1" -> Filters(Nil),
+              "2" -> Filters(Nil),
+              "3" -> Filters(Nil),
             ),
             filtersForAnyParty = None,
           )
@@ -279,7 +282,7 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
         eventFormat = Some(
           EventFormat(
             filtersByParty = Map.empty,
-            filtersForAnyParty = Some(Filters()),
+            filtersForAnyParty = Some(Filters(Nil)),
             verbose = true,
           )
         ),
@@ -315,6 +318,106 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
     ) shouldBe Nil
   }
 
+  behavior of "CommandServiceAuthorization.getSubmitAndWaitForTransactionClaims"
+
+  it should "compute the correct claims in the happy path" in {
+    CommandServiceAuthorization.getSubmitAndWaitForTransactionClaims(
+      submitAndWaitForTransactionRequest
+    ) should contain theSameElementsAs RequiredClaims[SubmitAndWaitForTransactionRequest](
+      RequiredClaim.ActAs("1"),
+      RequiredClaim.ActAs("2"),
+      RequiredClaim.ReadAs("a"),
+      RequiredClaim.ReadAs("b"),
+      RequiredClaim.ReadAs("i"),
+      RequiredClaim.ReadAs("ii"),
+      RequiredClaim.ReadAsAnyParty(),
+      RequiredClaim.MatchUserId(CommandServiceAuthorization.userIdForTransactionL),
+    )
+  }
+
+  it should "compute the correct claims if no filtersForAnyParty" in {
+    CommandServiceAuthorization.getSubmitAndWaitForTransactionClaims(
+      submitAndWaitForTransactionRequest.update(
+        _.transactionFormat.eventFormat.modify(_.clearFiltersForAnyParty)
+      )
+    ) should contain theSameElementsAs RequiredClaims[SubmitAndWaitForTransactionRequest](
+      RequiredClaim.ActAs("1"),
+      RequiredClaim.ActAs("2"),
+      RequiredClaim.ReadAs("a"),
+      RequiredClaim.ReadAs("b"),
+      RequiredClaim.ReadAs("i"),
+      RequiredClaim.ReadAs("ii"),
+      RequiredClaim.MatchUserId(CommandServiceAuthorization.userIdForTransactionL),
+    )
+  }
+
+  it should "compute the correct claims if no filtersByParty" in {
+    CommandServiceAuthorization.getSubmitAndWaitForTransactionClaims(
+      submitAndWaitForTransactionRequest.update(
+        _.transactionFormat.eventFormat.modify(_.clearFiltersByParty)
+      )
+    ) should contain theSameElementsAs RequiredClaims[SubmitAndWaitForTransactionRequest](
+      RequiredClaim.ActAs("1"),
+      RequiredClaim.ActAs("2"),
+      RequiredClaim.ReadAs("a"),
+      RequiredClaim.ReadAs("b"),
+      RequiredClaim.ReadAsAnyParty(),
+      RequiredClaim.MatchUserId(CommandServiceAuthorization.userIdForTransactionL),
+    )
+  }
+
+  it should "compute the correct claims if no transactionFormat" in {
+    CommandServiceAuthorization.getSubmitAndWaitForTransactionClaims(
+      submitAndWaitForTransactionRequest.clearTransactionFormat
+    ) should contain theSameElementsAs RequiredClaims[SubmitAndWaitForTransactionRequest](
+      RequiredClaim.ActAs("1"),
+      RequiredClaim.ActAs("2"),
+      RequiredClaim.ReadAs("a"),
+      RequiredClaim.ReadAs("b"),
+      RequiredClaim.MatchUserId(CommandServiceAuthorization.userIdForTransactionL),
+    )
+  }
+
+  it should "compute the correct claims if no actAs" in {
+    CommandServiceAuthorization.getSubmitAndWaitForTransactionClaims(
+      submitAndWaitForTransactionRequest.update(_.commands.modify(_.clearActAs))
+    ) should contain theSameElementsAs RequiredClaims[SubmitAndWaitForTransactionRequest](
+      RequiredClaim.ReadAs("a"),
+      RequiredClaim.ReadAs("b"),
+      RequiredClaim.ReadAs("i"),
+      RequiredClaim.ReadAs("ii"),
+      RequiredClaim.ReadAsAnyParty(),
+      RequiredClaim.MatchUserId(CommandServiceAuthorization.userIdForTransactionL),
+    )
+  }
+
+  it should "compute the correct claims if no readAs" in {
+    CommandServiceAuthorization.getSubmitAndWaitForTransactionClaims(
+      submitAndWaitForTransactionRequest.update(_.commands.modify(_.clearReadAs))
+    ) should contain theSameElementsAs RequiredClaims[SubmitAndWaitForTransactionRequest](
+      RequiredClaim.ActAs("1"),
+      RequiredClaim.ActAs("2"),
+      RequiredClaim.ReadAs("i"),
+      RequiredClaim.ReadAs("ii"),
+      RequiredClaim.ReadAsAnyParty(),
+      RequiredClaim.MatchUserId(CommandServiceAuthorization.userIdForTransactionL),
+    )
+  }
+
+  it should "compute the correct claims if no actAs and no readAs" in {
+    CommandServiceAuthorization.getSubmitAndWaitForTransactionClaims(
+      submitAndWaitForTransactionRequest.update(
+        _.commands.modify(_.clearReadAs),
+        _.commands.modify(_.clearActAs),
+      )
+    ) should contain theSameElementsAs RequiredClaims[SubmitAndWaitForTransactionRequest](
+      RequiredClaim.ReadAs("i"),
+      RequiredClaim.ReadAs("ii"),
+      RequiredClaim.ReadAsAnyParty(),
+      RequiredClaim.MatchUserId(CommandServiceAuthorization.userIdForTransactionL),
+    )
+  }
+
   behavior of "UpdateServiceAuthorization.getUpdatesClaims"
 
   it should "compute the correct claims in the happy path" in {
@@ -331,10 +434,10 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
                 eventFormat = Some(
                   EventFormat(
                     filtersByParty = Map(
-                      "a" -> Filters(),
-                      "b" -> Filters(),
+                      "a" -> Filters(Nil),
+                      "b" -> Filters(Nil),
                     ),
-                    filtersForAnyParty = Some(Filters()),
+                    filtersForAnyParty = Some(Filters(Nil)),
                     verbose = true,
                   )
                 ),
@@ -344,10 +447,10 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
             includeReassignments = Some(
               EventFormat(
                 filtersByParty = Map(
-                  "c" -> Filters(),
-                  "d" -> Filters(),
+                  "c" -> Filters(Nil),
+                  "d" -> Filters(Nil),
                 ),
-                filtersForAnyParty = Some(Filters()),
+                filtersForAnyParty = Some(Filters(Nil)),
                 verbose = true,
               )
             ),
@@ -382,8 +485,8 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
                 eventFormat = Some(
                   EventFormat(
                     filtersByParty = Map(
-                      "a" -> Filters(),
-                      "b" -> Filters(),
+                      "a" -> Filters(Nil),
+                      "b" -> Filters(Nil),
                     ),
                     filtersForAnyParty = None,
                     verbose = true,
@@ -395,8 +498,8 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
             includeReassignments = Some(
               EventFormat(
                 filtersByParty = Map(
-                  "c" -> Filters(),
-                  "d" -> Filters(),
+                  "c" -> Filters(Nil),
+                  "d" -> Filters(Nil),
                 ),
                 filtersForAnyParty = None,
                 verbose = true,
@@ -491,6 +594,7 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
         beginExclusive = 10,
         endInclusive = Some(15),
         filter = None,
+        verbose = false,
         updateFormat = None,
       )
     ) shouldBe Nil
@@ -505,9 +609,11 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
         verbose = true,
         updateFormat = Some(
           UpdateFormat(
+            includeTransactions = None,
+            includeReassignments = None,
             includeTopologyEvents = Some(
               TopologyFormat(Some(ParticipantAuthorizationTopologyFormat(parties = Seq("e", "f"))))
-            )
+            ),
           )
         ),
       )
@@ -530,12 +636,16 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
               TransactionFormat(
                 eventFormat = Some(
                   EventFormat(
-                    filtersForAnyParty = Some(Filters())
+                    filtersByParty = Map.empty,
+                    filtersForAnyParty = Some(Filters(Nil)),
+                    verbose = false,
                   )
                 ),
                 transactionShape = TRANSACTION_SHAPE_ACS_DELTA,
               )
-            )
+            ),
+            includeReassignments = None,
+            includeTopologyEvents = None,
           )
         ),
       )
@@ -555,9 +665,13 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
           UpdateFormat(
             includeReassignments = Some(
               EventFormat(
-                filtersForAnyParty = Some(Filters())
+                filtersByParty = Map.empty,
+                filtersForAnyParty = Some(Filters(Nil)),
+                verbose = false,
               )
-            )
+            ),
+            includeTransactions = None,
+            includeTopologyEvents = None,
           )
         ),
       )
@@ -575,9 +689,11 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
         verbose = true,
         updateFormat = Some(
           UpdateFormat(
+            includeTransactions = None,
+            includeReassignments = None,
             includeTopologyEvents = Some(
               TopologyFormat(Some(ParticipantAuthorizationTopologyFormat(parties = Seq.empty)))
-            )
+            ),
           )
         ),
       )
@@ -595,11 +711,11 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
         filter = Some(
           TransactionFilter(
             filtersByParty = Map(
-              "1" -> Filters(),
-              "2" -> Filters(),
-              "3" -> Filters(),
+              "1" -> Filters(Nil),
+              "2" -> Filters(Nil),
+              "3" -> Filters(Nil),
             ),
-            filtersForAnyParty = Some(Filters()),
+            filtersForAnyParty = Some(Filters(Nil)),
           )
         ),
         verbose = true,
@@ -622,9 +738,9 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
         filter = Some(
           TransactionFilter(
             filtersByParty = Map(
-              "1" -> Filters(),
-              "2" -> Filters(),
-              "3" -> Filters(),
+              "1" -> Filters(Nil),
+              "2" -> Filters(Nil),
+              "3" -> Filters(Nil),
             ),
             filtersForAnyParty = None,
           )
@@ -647,7 +763,8 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
         endInclusive = Some(15),
         filter = Some(
           TransactionFilter(
-            filtersForAnyParty = Some(Filters())
+            filtersByParty = Map.empty,
+            filtersForAnyParty = Some(Filters(Nil)),
           )
         ),
         verbose = true,
@@ -667,7 +784,7 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
       userIdL = userIdL,
       identityProviderIdL = identityProviderIdL,
     ) should contain theSameElementsAs RequiredClaims[String](
-      RequiredClaim.MatchUserId(userIdL),
+      RequiredClaim.MatchUserIdForUserManagement(userIdL),
       RequiredClaim.MatchIdentityProviderId(identityProviderIdL),
     )
   }
@@ -677,15 +794,16 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
   it should "compute the correct claims in the happy path" in {
     val result = EventQueryServiceAuthorization.getEventsByContractIdClaims(
       GetEventsByContractIdRequest(
+        contractId = "",
         requestingParties = Seq("a", "b", "c"),
         eventFormat = Some(
           EventFormat(
             filtersByParty = Map(
-              "A" -> Filters(),
-              "B" -> Filters(),
-              "C" -> Filters(),
+              "A" -> Filters(Nil),
+              "B" -> Filters(Nil),
+              "C" -> Filters(Nil),
             ),
-            filtersForAnyParty = Some(Filters()),
+            filtersForAnyParty = Some(Filters(Nil)),
             verbose = true,
           )
         ),
@@ -714,9 +832,8 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
     case adminOrIdp: RequiredClaim.AdminOrIdpAdmin[Req] => adminOrIdp
   }
 
-  def matchApplicationId[Req]
-      : PartialFunction[RequiredClaim[Req], RequiredClaim.MatchApplicationId[Req]] = {
-    case matchApplicationId: RequiredClaim.MatchApplicationId[Req] => matchApplicationId
+  def matchUserId[Req]: PartialFunction[RequiredClaim[Req], RequiredClaim.MatchUserId[Req]] = {
+    case matchUserId: RequiredClaim.MatchUserId[Req] => matchUserId
   }
 
   def matchIdentityProviderId[Req]
@@ -724,4 +841,32 @@ class ApiServicesRequiredClaimSpec extends AsyncFlatSpec with BaseTest with Matc
     case matchIdentityProviderId: RequiredClaim.MatchIdentityProviderId[Req] =>
       matchIdentityProviderId
   }
+}
+object ApiServicesRequiredClaimSpec {
+  val submitAndWaitForTransactionRequest =
+    SubmitAndWaitForTransactionRequest(
+      commands = Some(
+        Commands.defaultInstance.copy(
+          actAs = Seq("1", "2"),
+          readAs = Seq("a", "b"),
+          userId = "userId",
+        )
+      ),
+      transactionFormat = Some(
+        TransactionFormat(
+          eventFormat = Some(
+            EventFormat(
+              filtersByParty = Map(
+                "i" -> Filters(Nil),
+                "ii" -> Filters(Nil),
+              ),
+              filtersForAnyParty = Some(Filters(Nil)),
+              verbose = true,
+            )
+          ),
+          transactionShape = TRANSACTION_SHAPE_ACS_DELTA,
+        )
+      ),
+    )
+
 }

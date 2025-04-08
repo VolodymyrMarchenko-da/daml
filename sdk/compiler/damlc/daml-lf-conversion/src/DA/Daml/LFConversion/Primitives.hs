@@ -26,6 +26,8 @@ convertPrim _ "UAbort" (TText :-> t@(TUpdate a)) =
     pure $ ETmLam (varV1, TText) $ EUpdate (UEmbedExpr a (EBuiltinFun BEError `ETyApp` t `ETmApp` EVar varV1))
 convertPrim _ "UGetTime" (TUpdate TTimestamp) =
     pure $ EUpdate UGetTime
+convertPrim _ "ULedgerTimeLT" (TTimestamp :-> TUpdate TBool) =
+    pure $ ETmLam (varV1, TTimestamp) $ EUpdate (ULedgerTimeLT (EVar varV1))
 
 -- Comparison
 convertPrim _ "BEEqual" (a1 :-> a2 :-> TBool) | a1 == a2 =
@@ -92,6 +94,10 @@ convertPrim _ "BESha256Text" (TText :-> TText) =
     pure $ EBuiltinFun BESha256Text
 convertPrim _ "BEKecCak256Text" (TText :-> TText) =
     pure $ EBuiltinFun BEKecCak256Text
+convertPrim _ "BEEncodeHex" (TText :-> TText) =
+    pure $ EBuiltinFun BEEncodeHex
+convertPrim _ "BEDecodeHex" (TText :-> TText) =
+    pure $ EBuiltinFun BEDecodeHex
 convertPrim _ "BETextToParty" (TText :-> TOptional TParty) =
     pure $ EBuiltinFun BETextToParty
 convertPrim _ "BETextToInt64" (TText :-> TOptional TInt64) =
@@ -482,6 +488,10 @@ convertPrim _ "EChoiceObserver"
     EChoiceObserver template choiceName (EVar (mkVar "template")) (EVar (mkVar "choice"))
   where
     choiceName = ChoiceName (T.intercalate "." $ unTypeConName $ qualObject choice)
+
+convertPrim _ "EFailWithStatus"
+    (TText :-> TFailureCategory :-> TText :-> TTextMap TText :-> retTy) =
+    pure $ EBuiltinFun BEFailWithStatus `ETyApp` retTy
 
 convertPrim (isDevVersion->True) (L.stripPrefix "$" -> Just builtin) typ =
     pure $

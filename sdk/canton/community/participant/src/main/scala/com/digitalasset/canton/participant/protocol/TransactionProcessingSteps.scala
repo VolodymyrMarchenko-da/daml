@@ -384,7 +384,7 @@ class TransactionProcessingSteps(
         tracker
           .findHandle(
             submitterInfoWithDedupPeriod.commandId,
-            submitterInfoWithDedupPeriod.applicationId,
+            submitterInfoWithDedupPeriod.userId,
             submitterInfoWithDedupPeriod.actAs,
             submitterInfoWithDedupPeriod.submissionId,
           )
@@ -419,7 +419,7 @@ class TransactionProcessingSteps(
         case Failure(PassiveInstanceException(_reason)) =>
           val rejectionCause = TransactionSubmissionTrackingData.CauseWithTemplate(
             SyncServiceInjectionError.PassiveReplica.Error(
-              applicationId = submitterInfo.applicationId,
+              userId = submitterInfo.userId,
               commandId = submitterInfo.commandId,
             )
           )
@@ -1060,7 +1060,6 @@ class TransactionProcessingSteps(
 
   override def eventAndSubmissionIdForRejectedCommand(
       ts: CantonTimestamp,
-      rc: RequestCounter,
       sc: SequencerCounter,
       submitterMetadata: ViewSubmitterMetadata,
       _rootHash: RootHash,
@@ -1076,8 +1075,6 @@ class TransactionProcessingSteps(
           completionInfo,
           rejection,
           synchronizerId,
-          rc,
-          sc,
           ts,
         )
     } -> None // Transaction processing doesn't use pending submissions
@@ -1111,7 +1108,7 @@ class TransactionProcessingSteps(
     val completionInfoO =
       submitterMetaO.flatMap(completionInfoFromSubmitterMetadataO(_, freshOwnTimelyTx))
 
-    rejectionReason.logWithContext(Map("requestId" -> pendingTransaction.requestId.toString))
+    rejectionReason.logRejection(Map("requestId" -> pendingTransaction.requestId.toString))
     val rejection = Update.CommandRejected.FinalReason(rejectionReason.reason())
 
     val updateO = completionInfoO.map(info =>
@@ -1119,8 +1116,6 @@ class TransactionProcessingSteps(
         info,
         rejection,
         synchronizerId,
-        requestCounter,
-        requestSequencerCounter,
         requestTime,
       )
     )
@@ -1148,7 +1143,7 @@ class TransactionProcessingSteps(
   ): Option[CompletionInfo] = {
     lazy val completionInfo = CompletionInfo(
       meta.actAs.toList,
-      meta.applicationId.unwrap,
+      meta.userId.unwrap,
       meta.commandId.unwrap,
       Some(meta.dedupPeriod),
       meta.submissionId,
@@ -1209,10 +1204,8 @@ class TransactionProcessingSteps(
 
     computeCommitAndContractsAndEvent(
       requestTime = pendingRequestData.requestTime,
-      requestCounter = pendingRequestData.requestCounter,
       txId = txValidationResult.transactionId,
       workflowIdO = txValidationResult.workflowIdO,
-      requestSequencerCounter = pendingRequestData.requestSequencerCounter,
       commitSet = commitSet,
       createdContracts = txValidationResult.createdContracts,
       witnessed = txValidationResult.witnessed,
@@ -1223,10 +1216,8 @@ class TransactionProcessingSteps(
 
   private def computeCommitAndContractsAndEvent(
       requestTime: CantonTimestamp,
-      requestCounter: RequestCounter,
       txId: TransactionId,
       workflowIdO: Option[WorkflowId],
-      requestSequencerCounter: SequencerCounter,
       commitSet: CommitSet,
       createdContracts: Map[LfContractId, SerializableContract],
       witnessed: Map[LfContractId, SerializableContract],
@@ -1250,8 +1241,8 @@ class TransactionProcessingSteps(
       contractMetadata =
         // We deliberately do not forward the driver metadata
         // for divulged contracts since they are not visible on the Ledger API
-        (createdContracts ++ witnessed).view.collect {
-          case (contractId, SerializableContract(_, _, _, _, Some(salt))) =>
+        (createdContracts ++ witnessed).view.map {
+          case (contractId, SerializableContract(_, _, _, _, salt)) =>
             contractId -> DriverContractMetadata(salt).toLfBytes(protocolVersion)
         }.toMap
 
@@ -1273,8 +1264,6 @@ class TransactionProcessingSteps(
           updateId = lfTxId,
           contractMetadata = contractMetadata,
           synchronizerId = synchronizerId,
-          requestCounter = requestCounter,
-          sequencerCounter = requestSequencerCounter,
           recordTime = requestTime,
         )
     } yield CommitAndStoreContractsAndPublishEvent(
@@ -1320,10 +1309,8 @@ class TransactionProcessingSteps(
 
       commitAndContractsAndEvent <- computeCommitAndContractsAndEvent(
         requestTime = pendingRequestData.requestTime,
-        requestCounter = pendingRequestData.requestCounter,
         txId = pendingRequestData.transactionValidationResult.transactionId,
         workflowIdO = pendingRequestData.transactionValidationResult.workflowIdO,
-        requestSequencerCounter = pendingRequestData.requestSequencerCounter,
         commitSet = commitSet,
         createdContracts = createdContracts,
         witnessed = usedAndCreated.contracts.witnessed,

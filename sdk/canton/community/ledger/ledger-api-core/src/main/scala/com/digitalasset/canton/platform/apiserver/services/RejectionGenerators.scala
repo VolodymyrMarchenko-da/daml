@@ -3,13 +3,14 @@
 
 package com.digitalasset.canton.platform.apiserver.services
 
-import com.daml.error.{ContextualizedErrorLogger, DamlError}
+import com.digitalasset.base.error.{BaseError, DamlErrorWithDefiniteAnswer, RpcError}
 import com.digitalasset.canton.ledger.error.LedgerApiErrors
 import com.digitalasset.canton.ledger.error.groups.{
   CommandExecutionErrors,
   ConsistencyErrors,
   RequestValidationErrors,
 }
+import com.digitalasset.canton.logging.{ContextualizedErrorLogger, NoLogging}
 import com.digitalasset.canton.protocol.LfContractId
 import com.digitalasset.canton.time.NonNegativeFiniteDuration
 import com.digitalasset.canton.topology.SynchronizerId
@@ -38,15 +39,17 @@ object ErrorCause {
       tolerance: NonNegativeFiniteDuration,
       transactionTrace: Option[String],
   ) extends ErrorCause
+
+  final case class RoutingFailed(err: BaseError) extends ErrorCause
 }
 
 object RejectionGenerators {
 
   def commandExecutorError(cause: ErrorCause)(implicit
       errorLoggingContext: ContextualizedErrorLogger
-  ): DamlError = {
+  ): RpcError = {
 
-    def processPackageError(err: LfError.Package.Error): DamlError = err match {
+    def processPackageError(err: LfError.Package.Error): RpcError = err match {
       case e: Package.Internal => LedgerApiErrors.InternalError.PackageInternal(e)
       case Package.Validation(validationError) =>
         CommandExecutionErrors.Package.PackageValidationFailed
@@ -64,7 +67,7 @@ object RejectionGenerators {
         LedgerApiErrors.InternalError.PackageSelfConsistency(e)
     }
 
-    def processPreprocessingError(err: LfError.Preprocessing.Error): DamlError = err match {
+    def processPreprocessingError(err: LfError.Preprocessing.Error): RpcError = err match {
       case e: Preprocessing.Internal => LedgerApiErrors.InternalError.Preprocessing(e)
       case Preprocessing.UnresolvedPackageName(pkgName, context) =>
         RequestValidationErrors.NotFound.Package
@@ -72,7 +75,7 @@ object RejectionGenerators {
       case e => CommandExecutionErrors.Preprocessing.PreprocessingFailed.Reject(e)
     }
 
-    def processValidationError(err: LfError.Validation.Error): DamlError = err match {
+    def processValidationError(err: LfError.Validation.Error): RpcError = err match {
       // we shouldn't see such errors during submission
       case e: Validation.ReplayMismatch => LedgerApiErrors.InternalError.Validation(e)
     }
@@ -81,13 +84,16 @@ object RejectionGenerators {
         err: com.digitalasset.daml.lf.interpretation.Error,
         renderedMessage: String,
         transactionTrace: Option[String],
-    ): DamlError =
+    ): RpcError =
       // detailMessage is only suitable for server side debugging but not for the user, so don't pass except on internal errors
 
       err match {
         case LfInterpretationError.ContractNotFound(cid) =>
           ConsistencyErrors.ContractNotFound
             .Reject(renderedMessage, cid)
+        case LfInterpretationError.UnresolvedPackageName(packageName) =>
+          CommandExecutionErrors.Interpreter.LookupErrors.UnresolvedPackageName
+            .Reject(renderedMessage, packageName)
         case LfInterpretationError.ContractKeyNotFound(key) =>
           CommandExecutionErrors.Interpreter.LookupErrors.ContractKeyNotFound
             .Reject(renderedMessage, key)
@@ -144,6 +150,9 @@ object RejectionGenerators {
         case e: LfInterpretationError.ValueNesting =>
           CommandExecutionErrors.Interpreter.ValueNesting
             .Reject(renderedMessage, e)
+        case e: LfInterpretationError.FailureStatus =>
+          CommandExecutionErrors.Interpreter.FailureStatus
+            .Reject(renderedMessage, e, transactionTrace)
         case LfInterpretationError.Upgrade(error: LfInterpretationError.Upgrade.ValidationFailed) =>
           CommandExecutionErrors.Interpreter.UpgradeError.ValidationFailed
             .Reject(renderedMessage, error)
@@ -152,13 +161,25 @@ object RejectionGenerators {
             ) =>
           CommandExecutionErrors.Interpreter.UpgradeError.DowngradeDropDefinedField
             .Reject(renderedMessage, error)
-        case LfInterpretationError.Upgrade(error: LfInterpretationError.Upgrade.ViewMismatch) =>
-          CommandExecutionErrors.Interpreter.UpgradeError.ViewMismatch
-            .Reject(renderedMessage, error)
         case LfInterpretationError.Upgrade(
               error: LfInterpretationError.Upgrade.DowngradeFailed
             ) =>
           CommandExecutionErrors.Interpreter.UpgradeError.DowngradeFailed
+            .Reject(renderedMessage, error)
+        case LfInterpretationError.CCTP(
+              error: LfInterpretationError.CCTP.MalformedByteEncoding
+            ) =>
+          CommandExecutionErrors.Interpreter.CryptoError.MalformedByteEncoding
+            .Reject(renderedMessage, error)
+        case LfInterpretationError.CCTP(
+              error: LfInterpretationError.CCTP.MalformedKey
+            ) =>
+          CommandExecutionErrors.Interpreter.CryptoError.MalformedKey
+            .Reject(renderedMessage, error)
+        case LfInterpretationError.CCTP(
+              error: LfInterpretationError.CCTP.MalformedSignature
+            ) =>
+          CommandExecutionErrors.Interpreter.CryptoError.MalformedSignature
             .Reject(renderedMessage, error)
         case LfInterpretationError.Dev(_, err) =>
           CommandExecutionErrors.Interpreter.InterpretationDevError
@@ -168,7 +189,7 @@ object RejectionGenerators {
     def processInterpretationError(
         err: LfError.Interpretation.Error,
         detailMessage: Option[String],
-    ): DamlError =
+    ): RpcError =
       err match {
         case Interpretation.Internal(location, message, _) =>
           LedgerApiErrors.InternalError.Interpretation(location, message, detailMessage)
@@ -217,6 +238,13 @@ object RejectionGenerators {
           disclosedContractsWithSynchronizerId,
           synchronizerIdOfDisclosedContracts.toProtoPrimitive,
           commandsSynchronizerId.toProtoPrimitive,
+        )
+      case ErrorCause.RoutingFailed(baseError) =>
+        // TODO(#23334) Streamline ErrorCause usage
+        // TODO(#23334) This is logged again on this creation
+        new DamlErrorWithDefiniteAnswer(baseError.cause, baseError.throwableO)(
+          baseError.code,
+          NoLogging,
         )
     }
   }

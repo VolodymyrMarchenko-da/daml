@@ -3,7 +3,6 @@
 
 package com.digitalasset.canton.ledger.api.validation
 
-import com.daml.error.ContextualizedErrorLogger
 import com.daml.ledger.api.v2.transaction_filter.CumulativeFilter.IdentifierFilter
 import com.daml.ledger.api.v2.transaction_filter.{
   CumulativeFilter as ProtoCumulativeFilter,
@@ -34,6 +33,7 @@ import com.digitalasset.canton.ledger.api.{
   UpdateFormat,
 }
 import com.digitalasset.canton.ledger.error.groups.RequestValidationErrors
+import com.digitalasset.canton.logging.ContextualizedErrorLogger
 import io.grpc.StatusRuntimeException
 import scalaz.std.either.*
 import scalaz.std.list.*
@@ -62,23 +62,11 @@ object FormatValidator {
   ): Either[StatusRuntimeException, UpdateFormat] =
     for {
       eventFormat <- FormatValidator.validate(txFilter, verbose)
-      filterPartiesO = eventFormat.filtersForAnyParty match {
-        case Some(_) => None // wildcard
-        case None => Some(eventFormat.filtersByParty.keySet)
-      }
     } yield UpdateFormat(
       includeTransactions =
         Some(TransactionFormat(eventFormat = eventFormat, transactionShape = AcsDelta)),
       includeReassignments = Some(eventFormat),
-      includeTopologyEvents = Some(
-        TopologyFormat(
-          Some(
-            ParticipantAuthorizationFormat(
-              filterPartiesO
-            )
-          )
-        )
-      ),
+      includeTopologyEvents = None,
     )
 
   // TODO(i23504) Cleanup
@@ -94,7 +82,7 @@ object FormatValidator {
             Seq(
               ProtoCumulativeFilter(
                 ProtoCumulativeFilter.IdentifierFilter
-                  .WildcardFilter(WildcardFilter())
+                  .WildcardFilter(WildcardFilter(includeCreatedEventBlob = false))
               )
             )
           )

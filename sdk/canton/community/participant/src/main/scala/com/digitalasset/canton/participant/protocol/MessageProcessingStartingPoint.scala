@@ -25,12 +25,15 @@ import com.google.common.annotations.VisibleForTesting
   *   practice scheduled floating events (events which are not associated with a specific sequencer
   *   counter) can push this timestamp higher than lastSequencerTimestamp, and record order
   *   processing ensures this invariant.
+  * @param nextRepairCounter
+  *   The next repair counter for any subsequent repair at the current record time.
   */
 final case class MessageProcessingStartingPoint(
     nextRequestCounter: RequestCounter,
     nextSequencerCounter: SequencerCounter,
     lastSequencerTimestamp: CantonTimestamp,
     currentRecordTime: CantonTimestamp,
+    nextRepairCounter: RepairCounter,
 ) extends PrettyPrinting {
   require(currentRecordTime >= lastSequencerTimestamp)
 
@@ -39,6 +42,7 @@ final case class MessageProcessingStartingPoint(
     param("next sequencer counter", _.nextSequencerCounter),
     param("last sequencer timestamp", _.lastSequencerTimestamp),
     param("current record time", _.currentRecordTime),
+    param("next repair counter", _.nextRepairCounter),
   )
 
   def toMessageCleanReplayStartingPoint: MessageCleanReplayStartingPoint =
@@ -56,6 +60,7 @@ object MessageProcessingStartingPoint {
       SequencerCounter.Genesis,
       CantonTimestamp.MinValue,
       CantonTimestamp.MinValue,
+      RepairCounter.Genesis,
     )
 }
 

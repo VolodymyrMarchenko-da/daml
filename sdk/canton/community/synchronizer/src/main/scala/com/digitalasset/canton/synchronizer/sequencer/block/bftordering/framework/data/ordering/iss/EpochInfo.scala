@@ -5,7 +5,7 @@ package com.digitalasset.canton.synchronizer.sequencer.block.bftordering.framewo
 
 import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.modules.consensus.iss.data.Genesis.GenesisTopologyActivationTime
 import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.topology.TopologyActivationTime
-import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.framework.data.NumberIdentifiers.{
+import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.framework.data.BftOrderingIdentifiers.{
   BlockNumber,
   EpochLength,
   EpochNumber,
@@ -22,7 +22,10 @@ final case class EpochInfo(
   def relativeBlockIndex(blockNumber: BlockNumber): Int =
     (blockNumber - startBlockNumber).toInt
 
-  def next(length: EpochLength, topologyActivationTime: TopologyActivationTime): EpochInfo =
+  def next(
+      length: EpochLength,
+      topologyActivationTime: TopologyActivationTime,
+  ): EpochInfo =
     copy(
       EpochNumber(number + 1),
       startOfNextEpochBlockNumber,

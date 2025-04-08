@@ -44,7 +44,8 @@ import org.apache.pekko.{Done, NotUsed}
 
 import java.sql.Connection
 import java.util.concurrent.atomic.AtomicReference
-import scala.concurrent.Future
+import scala.concurrent.{ExecutionContext, Future}
+import scala.math.Ordered.orderingToOrdered
 import scala.util.chaining.*
 
 private[platform] final case class ParallelIndexerSubscription[DB_BATCH](
@@ -68,6 +69,7 @@ private[platform] final case class ParallelIndexerSubscription[DB_BATCH](
     reassignmentOffsetPersistence: ReassignmentOffsetPersistence,
     postProcessor: (Vector[PostPublishData], TraceContext) => Future[Unit],
     sequentialPostProcessor: Update => Unit,
+    disableMonotonicityChecks: Boolean,
     tracer: Tracer,
     loggerFactory: NamedLoggerFactory,
 ) extends NamedLogging
@@ -108,6 +110,10 @@ private[platform] final case class ParallelIndexerSubscription[DB_BATCH](
       metrics,
       logger,
     )
+    val loadPreviousSynchronizerIndexF = (synchronizerId: SynchronizerId) =>
+      dbDispatcher.executeSql(metrics.index.db.getCleanSynchronizerIndex)(
+        parameterStorageBackend.cleanSynchronizerIndex(synchronizerId)
+      )(LoggingContextWithTrace(loggerFactory))
 
     val ((sourceQueue, uniqueKillSwitch), completionFuture) = Source
       .queue[(Long, Update)](
@@ -125,7 +131,16 @@ private[platform] final case class ParallelIndexerSubscription[DB_BATCH](
         inclusive = true,
       )
       .map { case (longOffset, update) => Offset.tryFromLong(longOffset) -> update }
-      .via(monotonicOffsetValidator)
+      .via(
+        if (disableMonotonicityChecks)
+          Flow.apply
+        else
+          monotonicityValidator(
+            initialOffset = initialLedgerEnd.map(_.lastOffset),
+            loadPreviousState = loadPreviousSynchronizerIndexF,
+            logger = logger,
+          )
+      )
       .via(
         BatchingParallelIngestionPipe(
           submissionBatchSize = submissionBatchSize,
@@ -296,17 +311,87 @@ object ParallelIndexerSubscription {
       CantonTimestamp.MinValue, // this is a property of interest in the zero element: sets the lower bound for publication time, we start at MinValue
   )
 
-  def monotonicOffsetValidator[T]: Flow[(Offset, T), (Offset, T), NotUsed] =
-    Flow[(Offset, T)].statefulMap[Option[Offset], (Offset, T)](() => None)(
-      { case (prevO, (curr, upd)) =>
+  def monotonicityValidator(
+      initialOffset: Option[Offset],
+      loadPreviousState: SynchronizerId => Future[Option[SynchronizerIndex]],
+      logger: TracedLogger,
+  ): Flow[(Offset, Update), (Offset, Update), NotUsed] = {
+    implicit val directExecutionContext: ExecutionContext = DirectExecutionContext(logger)
+    val stateRef = new AtomicReference[Map[SynchronizerId, SynchronizerIndex]](Map.empty)
+    val lastOffset = new AtomicReference[Option[Offset]](initialOffset)
+
+    def checkAndUpdateOffset(offset: Offset): Unit = {
+      assert(
+        lastOffset.get() < Some(offset),
+        s"Monotonic Offset violation detected from ${lastOffset.get().getOrElse("participant begin")} to $offset",
+      )
+      lastOffset.set(Some(offset))
+    }
+
+    def checkAndUpdateSynchronizerIndex(offset: Offset)(
+        synchronizerId: SynchronizerId,
+        synchronizerIndex: SynchronizerIndex,
+    ): Future[Unit] =
+      stateRef
+        .get()
+        .get(synchronizerId)
+        .map(Some(_))
+        .map(Future.successful)
+        .getOrElse(loadPreviousState(synchronizerId))
+        .map { prevSynchronizerIndexO =>
+          checkSynchronizerIndex(prevSynchronizerIndexO, synchronizerIndex, offset, synchronizerId)
+          stateRef.set(
+            stateRef
+              .get()
+              .updated(
+                synchronizerId,
+                prevSynchronizerIndexO.map(_ max synchronizerIndex).getOrElse(synchronizerIndex),
+              )
+          )
+        }
+
+    Flow[(Offset, Update)].mapAsync(1) { case (offset, update) =>
+      checkAndUpdateOffset(offset)
+
+      Option(update)
+        .collect { case synchronizerIndexUpdate: SynchronizerIndexUpdate =>
+          synchronizerIndexUpdate.synchronizerIndex
+        }
+        .map(checkAndUpdateSynchronizerIndex(offset).tupled)
+        .getOrElse(Future.unit)
+        .map(_ => (offset, update))
+    }
+  }
+
+  private def checkSynchronizerIndex(
+      prevSynchronizerIndex: Option[SynchronizerIndex],
+      synchronizerIndex: SynchronizerIndex,
+      offset: Offset,
+      synchronizerId: SynchronizerId,
+  ): Unit =
+    prevSynchronizerIndex match {
+      case None => ()
+
+      case Some(prevIndex) =>
         assert(
-          prevO < Some(curr),
-          s"Monotonic Offset violation detected from ${prevO.getOrElse("participant begin")} to $curr",
+          prevIndex.recordTime <= synchronizerIndex.recordTime,
+          s"Monotonicity violation detected: record time decreases from ${prevIndex.recordTime} to ${synchronizerIndex.recordTime} at offset $offset and synchronizer $synchronizerId",
         )
-        (Some(curr), (curr, upd))
-      },
-      _ => None,
-    )
+        prevIndex.sequencerIndex.zip(synchronizerIndex.sequencerIndex).foreach {
+          case (prevSeqIndex, currSeqIndex) =>
+            assert(
+              prevSeqIndex.sequencerTimestamp < currSeqIndex.sequencerTimestamp,
+              s"Monotonicity violation detected: sequencer timestamp did not increase from ${prevSeqIndex.sequencerTimestamp} to ${currSeqIndex.sequencerTimestamp} at offset $offset and synchronizer $synchronizerId",
+            )
+        }
+        prevIndex.repairIndex.zip(synchronizerIndex.repairIndex).foreach {
+          case (prevRepairIndex, currRepairIndex) =>
+            assert(
+              prevRepairIndex <= currRepairIndex,
+              s"Monotonicity violation detected: repair index decreases from $prevRepairIndex to $currRepairIndex at offset $offset and synchronizer $synchronizerId",
+            )
+        }
+    }
 
   def inputMapper(
       metrics: LedgerApiServerMetrics,

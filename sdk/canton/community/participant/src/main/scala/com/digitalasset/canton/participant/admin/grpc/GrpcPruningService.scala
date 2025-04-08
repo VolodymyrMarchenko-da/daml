@@ -5,14 +5,14 @@ package com.digitalasset.canton.participant.admin.grpc
 
 import cats.data.EitherT
 import cats.implicits.*
-import com.daml.error.{ErrorCategory, ErrorCode, Explanation, Resolution}
+import com.digitalasset.base.error.{ErrorCategory, ErrorCode, Explanation, Resolution, RpcError}
 import com.digitalasset.canton.ProtoDeserializationError
 import com.digitalasset.canton.admin.grpc.{GrpcPruningScheduler, HasPruningScheduler}
 import com.digitalasset.canton.admin.participant.v30.*
 import com.digitalasset.canton.admin.pruning.v30
 import com.digitalasset.canton.data.{CantonTimestamp, Offset}
-import com.digitalasset.canton.error.CantonError
 import com.digitalasset.canton.error.CantonErrorGroups.ParticipantErrorGroup.PruningServiceErrorGroup
+import com.digitalasset.canton.error.{CantonError, ContextualizedCantonError}
 import com.digitalasset.canton.ledger.error.groups.RequestValidationErrors.InvalidArgument
 import com.digitalasset.canton.lifecycle.FutureUnlessShutdown
 import com.digitalasset.canton.logging.{ErrorLoggingContext, NamedLoggerFactory, NamedLogging}
@@ -208,7 +208,7 @@ class GrpcPruningService(
             .acsSetNoWaitCommitmentsFrom(noWaitDistinct),
           err => PruningServiceError.InternalServerError.Error(err.toString),
         )
-        .leftWiden[CantonError]
+        .leftWiden[RpcError]
     } yield {
       v30.SetNoWaitCommitmentsFromResponse()
     }
@@ -235,14 +235,14 @@ class GrpcPruningService(
           sync.pruningProcessor.acsGetNoWaitCommitmentsFrom(synchronizers, participants),
           err => PruningServiceError.InternalServerError.Error(err.toString),
         )
-        .leftWiden[CantonError]
+        .leftWiden[RpcError]
 
       allParticipants <- EitherTUtil
         .fromFuture(
           findAllKnownParticipants(synchronizers, participants),
           err => PruningServiceError.InternalServerError.Error(err.toString),
         )
-        .leftWiden[CantonError]
+        .leftWiden[RpcError]
 
       allParticipantsFiltered = allParticipants
         .map { case (synchronizerId, participants) =>
@@ -286,7 +286,7 @@ class GrpcPruningService(
             sync.pruningProcessor.acsResetNoWaitCommitmentsFrom(configs),
             err => PruningServiceError.InternalServerError.Error(err.toString),
           )
-          .leftWiden[CantonError]
+          .leftWiden[RpcError]
 
       } yield v30.ResetNoWaitCommitmentsFromResponse()
     CantonGrpcUtil.mapErrNewEUS(result)
@@ -321,7 +321,7 @@ class GrpcPruningService(
   }
 }
 
-sealed trait PruningServiceError extends CantonError
+sealed trait PruningServiceError extends ContextualizedCantonError
 object PruningServiceError extends PruningServiceErrorGroup {
 
   @Explanation(

@@ -139,6 +139,7 @@ kindOfBuiltin = \case
   BTRoundingMode -> KStar
   BTBigNumeric -> KStar
   BTAnyException -> KStar
+  BTFailureCategory -> KStar
 
 checkKind :: MonadGamma m => Kind -> m ()
 checkKind = \case
@@ -217,6 +218,7 @@ typeOfBuiltin = \case
   BEUnit             -> pure TUnit
   BEBool _           -> pure TBool
   BERoundingMode _   -> pure TRoundingMode
+  BEFailureCategory _ -> pure TFailureCategory
   BEError            -> pure $ TForall (alpha, KStar) (TText :-> tAlpha)
   BEAnyExceptionMessage -> pure $ TAnyException :-> TText
   BEEqual     -> pure $ TForall (alpha, KStar) (tAlpha :-> tAlpha :-> TBool)
@@ -263,6 +265,8 @@ typeOfBuiltin = \case
   BEImplodeText      -> pure $ TList TText :-> TText
   BESha256Text       -> pure $ TText :-> TText
   BEKecCak256Text    -> pure $ TText :-> TText
+  BEEncodeHex        -> pure $ TText :-> TText
+  BEDecodeHex        -> pure $ TText :-> TText
   BESecp256k1Bool    -> pure $ TText :-> TText :-> TText :-> TBool
   BEFoldl -> pure $ TForall (alpha, KStar) $ TForall (beta, KStar) $
              (tBeta :-> tAlpha :-> tBeta) :-> tBeta :-> TList tAlpha :-> tBeta
@@ -295,6 +299,8 @@ typeOfBuiltin = \case
     pure $ TForall (alpha, KStar) $ TForall (beta, KStar) $ TContractId tAlpha :-> TContractId tBeta
 
   BETypeRepTyConName -> pure (TTypeRep :-> TOptional TText)
+
+  BEFailWithStatus -> pure $ TForall (alpha, KStar) $ TText :-> TFailureCategory :-> TText :-> TTextMap TText :-> tAlpha
 
   where
     tBinop typ = typ :-> typ :-> typ
@@ -643,6 +649,9 @@ typeOfUpdate = \case
   UFetch tpl cid -> checkFetch tpl cid $> TUpdate (TCon tpl)
   UFetchInterface tpl cid -> checkFetchInterface tpl cid $> TUpdate (TCon tpl)
   UGetTime -> pure (TUpdate TTimestamp)
+  ULedgerTimeLT e -> do
+    checkExpr e TTimestamp
+    return (TUpdate TBool)
   UEmbedExpr typ e -> do
     checkExpr e (TUpdate typ)
     return (TUpdate typ)

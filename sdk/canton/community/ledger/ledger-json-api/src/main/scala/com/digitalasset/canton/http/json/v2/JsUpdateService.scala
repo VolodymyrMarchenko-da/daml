@@ -16,7 +16,6 @@ import com.digitalasset.canton.http.json.v2.JsSchema.{
   JsTransaction,
   JsTransactionTree,
 }
-import com.digitalasset.canton.http.json.v2.Protocol.Protocol
 import com.digitalasset.canton.http.json.v2.damldefinitionsservice.Schema.Codecs.*
 import com.digitalasset.canton.ledger.client.LedgerClient
 import com.digitalasset.canton.logging.{NamedLoggerFactory, NamedLogging}
@@ -78,8 +77,16 @@ class JsUpdateService(
       getTransactionByOffset,
     ),
     withServerLogic(
+      JsUpdateService.getUpdateByOffsetEndpoint,
+      getUpdateByOffset,
+    ),
+    withServerLogic(
       JsUpdateService.getTransactionByIdEndpoint,
       getTransactionById,
+    ),
+    withServerLogic(
+      JsUpdateService.getUpdateByIdEndpoint,
+      getUpdateById,
     ),
     withServerLogic(
       JsUpdateService.getTransactionTreeByIdEndpoint,
@@ -92,13 +99,13 @@ class JsUpdateService(
   ): TracedInput[(Long, List[String])] => Future[
     Either[JsCantonError, JsGetTransactionTreeResponse]
   ] = { req =>
-    implicit val token: Option[String] = caller.token()
     implicit val tc: TraceContext = req.traceContext
     updateServiceClient(caller.token())(req.traceContext)
       .getTransactionTreeByOffset(
         update_service.GetTransactionByOffsetRequest(
           offset = req.in._1,
           requestingParties = req.in._2,
+          transactionFormat = None,
         )
       )
       .flatMap(protocolConverters.GetTransactionTreeResponse.toJson(_))
@@ -111,11 +118,36 @@ class JsUpdateService(
     Either[JsCantonError, JsGetTransactionResponse]
   ] =
     req => {
-      implicit val token = caller.token()
       implicit val tc = req.traceContext
       updateServiceClient(caller.token())(req.traceContext)
         .getTransactionByOffset(req.in)
         .flatMap(protocolConverters.GetTransactionResponse.toJson(_))
+        .resultToRight
+    }
+
+  private def getUpdateByOffset(
+      caller: CallerContext
+  ): TracedInput[update_service.GetUpdateByOffsetRequest] => Future[
+    Either[JsCantonError, JsGetUpdateResponse]
+  ] =
+    req => {
+      implicit val tc = req.traceContext
+      updateServiceClient(caller.token())(req.traceContext)
+        .getUpdateByOffset(req.in)
+        .flatMap(protocolConverters.GetUpdateResponse.toJson(_))
+        .resultToRight
+    }
+
+  private def getUpdateById(
+      caller: CallerContext
+  ): TracedInput[update_service.GetUpdateByIdRequest] => Future[
+    Either[JsCantonError, JsGetUpdateResponse]
+  ] =
+    req => {
+      implicit val tc = req.traceContext
+      updateServiceClient(caller.token())(req.traceContext)
+        .getUpdateById(req.in)
+        .flatMap(protocolConverters.GetUpdateResponse.toJson(_))
         .resultToRight
     }
 
@@ -124,7 +156,6 @@ class JsUpdateService(
   ): TracedInput[update_service.GetTransactionByIdRequest] => Future[
     Either[JsCantonError, JsGetTransactionResponse]
   ] = { req =>
-    implicit val token = caller.token()
     implicit val tc = req.traceContext
     updateServiceClient(caller.token())(req.traceContext)
       .getTransactionById(req.in)
@@ -138,13 +169,13 @@ class JsUpdateService(
     Either[JsCantonError, JsGetTransactionTreeResponse]
   ] =
     req => {
-      implicit val token = caller.token()
       implicit val tc = req.traceContext
       updateServiceClient(caller.token())(req.traceContext)
         .getTransactionTreeById(
           update_service.GetTransactionByIdRequest(
             updateId = req.in._1,
             requestingParties = req.in._2,
+            transactionFormat = None,
           )
         )
         .flatMap { tr =>
@@ -154,37 +185,29 @@ class JsUpdateService(
     }
 
   private def getFlats(
-      caller: CallerContext,
-      protocol: Protocol,
+      caller: CallerContext
   ): TracedInput[Unit] => Flow[update_service.GetUpdatesRequest, JsGetUpdatesResponse, NotUsed] =
     req => {
-      implicit val token = caller.token()
       implicit val tc = req.traceContext
       prepareSingleWsStream(
         updateServiceClient(caller.token())(TraceContext.empty).getUpdates,
         (r: update_service.GetUpdatesResponse) => protocolConverters.GetUpdatesResponse.toJson(r),
-        protocol = protocol,
-        withCloseDelay = true,
       )
     }
 
   private def getTrees(
-      caller: CallerContext,
-      protocol: Protocol,
+      caller: CallerContext
   ): TracedInput[Unit] => Flow[
     update_service.GetUpdatesRequest,
     JsGetUpdateTreesResponse,
     NotUsed,
   ] =
     wsReq => {
-      implicit val token: Option[String] = caller.token()
       implicit val tc: TraceContext = wsReq.traceContext
       prepareSingleWsStream(
         updateServiceClient(caller.token()).getUpdateTrees,
         (r: update_service.GetUpdateTreesResponse) =>
           protocolConverters.GetUpdateTreesResponse.toJson(r),
-        protocol = protocol,
-        withCloseDelay = true,
       )
     }
 
@@ -269,6 +292,20 @@ object JsUpdateService extends DocumentationEndpoints {
       .out(jsonBody[JsGetTransactionResponse])
       .description("Get transaction by offset")
 
+  val getUpdateByOffsetEndpoint =
+    updates.post
+      .in(sttp.tapir.stringToPath("update-by-offset"))
+      .in(jsonBody[update_service.GetUpdateByOffsetRequest])
+      .out(jsonBody[JsGetUpdateResponse])
+      .description("Get update by offset")
+
+  val getUpdateByIdEndpoint =
+    updates.post
+      .in(sttp.tapir.stringToPath("update-by-id"))
+      .in(jsonBody[update_service.GetUpdateByIdRequest])
+      .out(jsonBody[JsGetUpdateResponse])
+      .description("Get update by id")
+
   override def documentation: Seq[AnyEndpoint] = List(
     getUpdatesFlatEndpoint,
     getUpdatesFlatListEndpoint,
@@ -276,7 +313,9 @@ object JsUpdateService extends DocumentationEndpoints {
     getUpdatesTreeListEndpoint,
     getTransactionTreeByOffsetEndpoint,
     getTransactionByOffsetEndpoint,
+    getUpdateByOffsetEndpoint,
     getTransactionByIdEndpoint,
+    getUpdateByIdEndpoint,
     getTransactionTreeByIdEndpoint,
   )
 }
@@ -303,7 +342,7 @@ final case class JsReassignment(
     commandId: String,
     workflowId: String,
     offset: Long,
-    event: JsReassignmentEvent.JsReassignmentEvent,
+    events: Seq[JsReassignmentEvent.JsReassignmentEvent],
     traceContext: Option[com.daml.ledger.api.v2.trace_context.TraceContext],
     recordTime: com.google.protobuf.timestamp.Timestamp,
 )
@@ -320,6 +359,8 @@ final case class JsGetTransactionTreeResponse(transaction: JsTransactionTree)
 
 final case class JsGetTransactionResponse(transaction: JsTransaction)
 
+final case class JsGetUpdateResponse(update: JsUpdate.Update)
+
 final case class JsGetUpdatesResponse(
     update: JsUpdate.Update
 )
@@ -329,7 +370,6 @@ object JsUpdateTree {
   final case class OffsetCheckpoint(value: offset_checkpoint.OffsetCheckpoint) extends Update
   final case class Reassignment(value: JsReassignment) extends Update
   final case class TransactionTree(value: JsTransactionTree) extends Update
-  final case class TopologyTransaction(value: JsTopologyTransaction) extends Update
 }
 
 final case class JsGetUpdateTreesResponse(
@@ -337,13 +377,10 @@ final case class JsGetUpdateTreesResponse(
 )
 
 object JsUpdateServiceCodecs {
-  import JsCommandServiceCodecs.*
-  import JsStateServiceCodecs.*
+  import JsSchema.JsServicesCommonCodecs.*
 
   implicit val participantAuthorizationTopologyFormatRW
       : Codec[ParticipantAuthorizationTopologyFormat] = deriveCodec
-  implicit val transactionShapeFormatRW: Codec[transaction_filter.TransactionShape] = deriveCodec
-  implicit val transactionFormatRW: Codec[transaction_filter.TransactionFormat] = deriveCodec
   implicit val topologyFormatRW: Codec[transaction_filter.TopologyFormat] = deriveCodec
   implicit val updateFormatRW: Codec[transaction_filter.UpdateFormat] = deriveCodec
   implicit val getUpdatesRequest: Codec[update_service.GetUpdatesRequest] = deriveCodec
@@ -351,6 +388,9 @@ object JsUpdateServiceCodecs {
     deriveCodec
   implicit val getTransactionByOffsetRequestRW
       : Codec[update_service.GetTransactionByOffsetRequest] =
+    deriveCodec
+  implicit val getUpdateByIdRequestRW: Codec[update_service.GetUpdateByIdRequest] = deriveCodec
+  implicit val getUpdateByOffsetRequestRW: Codec[update_service.GetUpdateByOffsetRequest] =
     deriveCodec
 
   implicit val jsGetUpdatesResponse: Codec[JsGetUpdatesResponse] = deriveCodec
@@ -376,12 +416,11 @@ object JsUpdateServiceCodecs {
 
   implicit val jsGetTransactionTreeResponse: Codec[JsGetTransactionTreeResponse] = deriveCodec
   implicit val jsGetTransactionResponse: Codec[JsGetTransactionResponse] = deriveCodec
+  implicit val jsGetUpdateResponse: Codec[JsGetUpdateResponse] = deriveCodec
 
   implicit val jsUpdateTree: Codec[JsUpdateTree.Update] = deriveCodec
   implicit val jsUpdateTreeReassignment: Codec[JsUpdateTree.Reassignment] = deriveCodec
   implicit val jsUpdateTreeTransaction: Codec[JsUpdateTree.TransactionTree] = deriveCodec
-  implicit val jsUpdateTreeTopologyTransaction: Codec[JsUpdateTree.TopologyTransaction] =
-    deriveCodec
 
   // Schema mappings are added to align generated tapir docs with a circe mapping of ADTs
   @SuppressWarnings(Array("org.wartremover.warts.Product", "org.wartremover.warts.Serializable"))

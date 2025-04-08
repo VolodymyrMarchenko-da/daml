@@ -10,12 +10,12 @@ import com.digitalasset.canton.config.ProcessingTimeout
 import com.digitalasset.canton.lifecycle.FlagCloseable
 import com.digitalasset.canton.logging.{NamedLoggerFactory, NamedLogging}
 import com.digitalasset.canton.synchronizer.metrics.BftOrderingMetrics
-import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.driver.BftBlockOrderer
+import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.driver.BftBlockOrdererConfig
 import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.modules.consensus.iss.data.EpochStore.Block
-import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.modules.consensus.iss.leaders.LeaderSelectionPolicy
 import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.modules.consensus.iss.retransmissions.EpochStatusBuilder
 import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.framework.Env
-import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.framework.data.NumberIdentifiers.{
+import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.framework.data.BftOrderingIdentifiers.{
+  BftNodeId,
   BlockNumber,
   EpochNumber,
 }
@@ -33,7 +33,6 @@ import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.framewor
   ConsensusStatus,
 }
 import com.digitalasset.canton.time.Clock
-import com.digitalasset.canton.topology.SequencerId
 import com.digitalasset.canton.tracing.TraceContext
 import com.google.common.annotations.VisibleForTesting
 
@@ -53,7 +52,7 @@ class EpochState[E <: Env[E]](
     completedBlocks: Seq[Block] = Seq.empty,
     override val loggerFactory: NamedLoggerFactory,
     override val timeouts: ProcessingTimeout,
-)(implicit mc: MetricsContext, config: BftBlockOrderer.Config)
+)(implicit mc: MetricsContext, config: BftBlockOrdererConfig)
     extends NamedLogging
     with FlagCloseable {
 
@@ -82,7 +81,8 @@ class EpochState[E <: Env[E]](
     commitCertificates.toList.sequence
       .fold[EpochState.EpochCompletionStatus](EpochState.Incomplete)(EpochState.Complete(_))
 
-  private val segmentModules: Map[SequencerId, E#ModuleRefT[ConsensusSegment.Message]] =
+  // Segment module references are lazy so that the segment module factory is not triggered on object creation
+  private lazy val segmentModules: Map[BftNodeId, E#ModuleRefT[ConsensusSegment.Message]] =
     ListMap.from(epoch.segments.view.map { segment =>
       segment.originalLeader -> segmentModuleRefFactory(
         new SegmentState(
@@ -98,10 +98,11 @@ class EpochState[E <: Env[E]](
       )
     })
 
-  private val mySegmentModule = segmentModules.get(epoch.currentMembership.myId)
+  private lazy val mySegmentModule = segmentModules.get(epoch.currentMembership.myId)
   private val mySegment = epoch.segments.find(_.originalLeader == epoch.currentMembership.myId)
 
-  private val blockToSegmentModule: Map[BlockNumber, E#ModuleRefT[ConsensusSegment.Message]] = {
+  private lazy val blockToSegmentModule
+      : Map[BlockNumber, E#ModuleRefT[ConsensusSegment.Message]] = {
     val blockToLeader = (for {
       segment <- epoch.segments
       number <- segment.slotNumbers
@@ -143,7 +144,7 @@ class EpochState[E <: Env[E]](
     }
 
   def processRetransmissionResponse(
-      from: SequencerId,
+      from: BftNodeId,
       commitCerts: Seq[CommitCertificate],
   )(implicit traceContext: TraceContext): Unit =
     performUnlessClosing("processRetransmissionsRequest") {
@@ -238,32 +239,20 @@ object EpochState {
       info: EpochInfo,
       currentMembership: Membership,
       previousMembership: Membership,
-      leaderSelectionPolicy: LeaderSelectionPolicy,
   ) {
-
-    // If leaders.size > epoch length, not every leader can be assigned a segment. Thus, we rotate them
-    // to provide more fairness.
-    val leaders: Seq[SequencerId] = {
-      val selectedLeaders =
-        leaderSelectionPolicy.selectLeaders(currentMembership.orderingTopology.peers)
-      if (selectedLeaders.sizeIs > info.length.toInt) {
-        leaderSelectionPolicy.rotateLeaders(selectedLeaders, info.number)
-      } else selectedLeaders.toSeq
-    }
-
     // Using `take` below, we select either a subset of leaders (if leaders.size > epoch length),
     // or the entire leaders collection. In general, having leaders.size > epoch length seems like
     // poor parameters configuration.
-    val segments: Seq[Segment] = leaders
+    val segments: Seq[Segment] = currentMembership.leaders
       .take(info.length.toInt)
       .zipWithIndex
-      .map { case (peer, index) =>
-        createSegment(peer, index)
+      .map { case (node, index) =>
+        createSegment(node, index)
       }
 
-    private def createSegment(leader: SequencerId, leaderIndex: Int): Segment = {
+    private def createSegment(leader: BftNodeId, leaderIndex: Int): Segment = {
       val firstSlot = BlockNumber(info.startBlockNumber + leaderIndex)
-      val stepSize = leaders.size
+      val stepSize = currentMembership.leaders.size
       Segment(
         originalLeader = leader,
         slotNumbers = NonEmpty.mk(
@@ -279,7 +268,7 @@ object EpochState {
   }
 
   final case class Segment(
-      originalLeader: SequencerId,
+      originalLeader: BftNodeId,
       slotNumbers: NonEmpty[Seq[BlockNumber]],
   ) {
     def relativeBlockIndex(blockNumber: BlockNumber): Int = slotNumbers.indexOf(blockNumber)

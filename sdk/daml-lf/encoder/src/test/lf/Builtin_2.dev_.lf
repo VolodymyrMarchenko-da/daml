@@ -93,6 +93,8 @@ module BuiltinMod {
     KECCAK256_TEXT;
   val secp256k1Bool: Text -> Text -> Text -> Bool =
     SECP256K1_BOOL;
+  val textToHex: Text -> Text = TEXT_TO_HEX;
+  val hexToText: Text -> Text = HEX_TO_TEXT;
   val dateToUnixDays: Date -> Int64 =
     DATE_TO_UNIX_DAYS;
   val explodeText: Text -> List Text =
@@ -147,5 +149,6 @@ module BuiltinMod {
     ANY_EXCEPTION_MESSAGE;
   val typeRepTyconName: TypeRep -> Option Text =
     TYPE_REP_TYCON_NAME;
-
+  val failWithStatus: forall (a: *). Text -> FailureCategory -> Text -> TextMap Text -> a =
+    FAIL_WITH_STATUS;
 }

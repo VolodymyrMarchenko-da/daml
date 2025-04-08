@@ -3,16 +3,23 @@
 
 package com.digitalasset.canton.platform.apiserver.error
 
-import com.daml.error.*
-import com.daml.error.utils.ErrorDetails
 import com.daml.grpc.test.StreamConsumer
 import com.daml.ledger.api.testing.utils.{PekkoBeforeAndAfterAll, TestingServerInterceptors}
 import com.daml.ledger.resources.ResourceOwner
+import com.digitalasset.base.error.utils.ErrorDetails
+import com.digitalasset.base.error.{
+  BaseError,
+  ContextualizedDamlError,
+  ErrorCategory,
+  ErrorClass,
+  ErrorCode,
+  ErrorsAssertions,
+}
 import com.digitalasset.canton.grpc.sampleservice.HelloServiceReferenceImplementation
 import com.digitalasset.canton.ledger.api.grpc.StreamingServiceLifecycleManagement
 import com.digitalasset.canton.ledger.error.CommonErrors
 import com.digitalasset.canton.ledger.resources.TestResourceContext
-import com.digitalasset.canton.logging.{NamedLoggerFactory, NamedLogging}
+import com.digitalasset.canton.logging.{ContextualizedErrorLogger, NamedLoggerFactory, NamedLogging}
 import com.digitalasset.canton.tracing.TraceContext
 import com.digitalasset.canton.{BaseTest, HasExecutionContext, protobuf}
 import io.grpc.*
@@ -369,7 +376,7 @@ object ErrorInterceptorSpec {
 
     final case class Error(msg: String)(implicit
         val loggingContext: ContextualizedErrorLogger
-    ) extends DamlError(
+    ) extends ContextualizedDamlError(
           cause = s"Foo is missing: $msg"
         )
 

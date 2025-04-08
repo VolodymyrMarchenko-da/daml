@@ -3,8 +3,8 @@
 
 package com.digitalasset.canton.ledger.participant.state
 
-import com.daml.error.GrpcStatuses
 import com.daml.logging.entries.{LoggingEntry, LoggingValue, ToLoggingValue}
+import com.digitalasset.base.error.GrpcStatuses
 import com.digitalasset.canton.data.{CantonTimestamp, DeduplicationPeriod}
 import com.digitalasset.canton.ledger.participant.state.Update.CommandRejected.RejectionReasonTemplate
 import com.digitalasset.canton.logging.ErrorLoggingContext
@@ -13,7 +13,7 @@ import com.digitalasset.canton.protocol.LfHash
 import com.digitalasset.canton.topology.SynchronizerId
 import com.digitalasset.canton.tracing.{HasTraceContext, TraceContext}
 import com.digitalasset.canton.util.ErrorUtil
-import com.digitalasset.canton.{RequestCounter, SequencerCounter, data}
+import com.digitalasset.canton.{RepairCounter, data}
 import com.digitalasset.daml.lf.data.Time.Timestamp
 import com.digitalasset.daml.lf.data.{Bytes, Ref}
 import com.digitalasset.daml.lf.engine.Blinding
@@ -72,46 +72,41 @@ sealed trait SynchronizerUpdate extends Update {
   * ahead.
   */
 sealed trait SynchronizerIndexUpdate extends SynchronizerUpdate {
-  def requestCounterO: Option[RequestCounter]
+  def repairCounterO: Option[RepairCounter]
 
-  def sequencerCounterO: Option[SequencerCounter]
-
-  final def requestIndexO: Option[RequestIndex] =
-    requestCounterO.map(RequestIndex(_, sequencerCounterO, recordTime))
-
-  final def sequencerIndexO: Option[SequencerIndex] =
-    sequencerCounterO.map(SequencerIndex(_, recordTime))
+  def sequencerIndexO: Option[SequencerIndex]
 
   final def synchronizerIndex: (SynchronizerId, SynchronizerIndex) =
-    synchronizerId -> SynchronizerIndex(requestIndexO, sequencerIndexO, recordTime)
+    synchronizerId -> SynchronizerIndex(
+      repairCounterO.map(RepairIndex(recordTime, _)),
+      sequencerIndexO,
+      recordTime,
+    )
 }
 
 sealed trait SequencedUpdate extends SynchronizerIndexUpdate {
-  def sequencerCounter: SequencerCounter
+  final override def sequencerIndexO: Option[SequencerIndex] = Some(SequencerIndex(recordTime))
 
-  final override def sequencerCounterO: Option[SequencerCounter] = Some(sequencerCounter)
-}
-
-sealed trait RequestUpdate extends SynchronizerIndexUpdate {
-  def requestCounter: RequestCounter
-
-  final override def requestCounterO: Option[RequestCounter] = Some(requestCounter)
+  final override def repairCounterO: Option[RepairCounter] = None
 }
 
 sealed trait FloatingUpdate extends SynchronizerIndexUpdate {
+  final override def sequencerIndexO: Option[SequencerIndex] = None
 
-  final override def requestCounterO: Option[RequestCounter] = None
-
-  final override def sequencerCounterO: Option[SequencerCounter] = None
+  final override def repairCounterO: Option[RepairCounter] = None
 }
 
-sealed trait RepairUpdate extends RequestUpdate {
-  final override def sequencerCounterO: Option[SequencerCounter] = None
+sealed trait RepairUpdate extends SynchronizerIndexUpdate {
+  def repairCounter: RepairCounter
+
+  final override def repairCounterO: Option[RepairCounter] = Some(repairCounter)
+
+  final override def sequencerIndexO: Option[SequencerIndex] = None
 }
 
 trait LapiCommitSet
 
-sealed trait CommitSetUpdate extends RequestUpdate with SequencedUpdate {
+sealed trait CommitSetUpdate extends SequencedUpdate {
   protected def commitSetO: Option[LapiCommitSet]
 
   /** Expected to be set already when accessed
@@ -243,7 +238,7 @@ object Update {
 
   /** Signal the acceptance of a transaction.
     */
-  trait TransactionAccepted extends RequestUpdate {
+  trait TransactionAccepted extends SynchronizerIndexUpdate {
 
     /** The information provided by the submitter of the command that created this transaction. It
       * must be provided if this participant hosts one of the [[SubmitterInfo.actAs]] parties and
@@ -315,8 +310,6 @@ object Update {
       updateId: data.UpdateId,
       contractMetadata: Map[Value.ContractId, Bytes],
       synchronizerId: SynchronizerId,
-      requestCounter: RequestCounter,
-      sequencerCounter: SequencerCounter,
       recordTime: CantonTimestamp,
       commitSetO: Option[LapiCommitSet] = None,
   )(implicit override val traceContext: TraceContext)
@@ -333,7 +326,7 @@ object Update {
       updateId: data.UpdateId,
       contractMetadata: Map[Value.ContractId, Bytes],
       synchronizerId: SynchronizerId,
-      requestCounter: RequestCounter,
+      repairCounter: RepairCounter,
       recordTime: CantonTimestamp,
   )(implicit override val traceContext: TraceContext)
       extends TransactionAccepted
@@ -342,7 +335,7 @@ object Update {
     override def completionInfoO: Option[CompletionInfo] = None
   }
 
-  trait ReassignmentAccepted extends RequestUpdate {
+  trait ReassignmentAccepted extends SynchronizerIndexUpdate {
 
     /** The information provided by the submitter of the command that created this reassignment. It
       * must be provided if this participant hosts the submitter and shall output a completion event
@@ -389,8 +382,6 @@ object Update {
       updateId: data.UpdateId,
       reassignmentInfo: ReassignmentInfo,
       reassignment: Reassignment,
-      requestCounter: RequestCounter,
-      sequencerCounter: SequencerCounter,
       recordTime: CantonTimestamp,
       commitSetO: Option[LapiCommitSet] = None,
   )(implicit override val traceContext: TraceContext)
@@ -406,7 +397,7 @@ object Update {
       updateId: data.UpdateId,
       reassignmentInfo: ReassignmentInfo,
       reassignment: Reassignment,
-      requestCounter: RequestCounter,
+      repairCounter: RepairCounter,
       recordTime: CantonTimestamp,
   )(implicit override val traceContext: TraceContext)
       extends ReassignmentAccepted
@@ -459,13 +450,10 @@ object Update {
       completionInfo: CompletionInfo,
       reasonTemplate: RejectionReasonTemplate,
       synchronizerId: SynchronizerId,
-      requestCounter: RequestCounter,
-      sequencerCounter: SequencerCounter,
       recordTime: CantonTimestamp,
   )(implicit override val traceContext: TraceContext)
       extends CommandRejected
       with SequencedUpdate
-      with RequestUpdate
 
   final case class UnSequencedCommandRejected(
       completionInfo: CompletionInfo,
@@ -484,7 +472,7 @@ object Update {
         LoggingValue.Nested.fromEntries(
           Logging.recordTime(commandRejected.recordTime.toLf),
           Logging.submitter(commandRejected.completionInfo.actAs),
-          Logging.applicationId(commandRejected.completionInfo.applicationId),
+          Logging.userId(commandRejected.completionInfo.userId),
           Logging.commandId(commandRejected.completionInfo.commandId),
           Logging.deduplicationPeriod(commandRejected.completionInfo.optDeduplicationPeriod),
           Logging.rejectionReason(commandRejected.reasonTemplate),
@@ -534,17 +522,13 @@ object Update {
 
   final case class SequencerIndexMoved(
       synchronizerId: SynchronizerId,
-      sequencerCounter: SequencerCounter,
       recordTime: CantonTimestamp,
-      requestCounterO: Option[RequestCounter],
   )(implicit override val traceContext: TraceContext)
       extends SequencedUpdate {
     override protected def pretty: Pretty[SequencerIndexMoved] =
       prettyOfClass(
         param("synchronizerId", _.synchronizerId.uid),
-        param("sequencerCounter", _.sequencerCounter),
         param("sequencerTimestamp", _.recordTime),
-        paramIfDefined("requestCounter", _.requestCounterO),
       )
   }
 
@@ -553,7 +537,6 @@ object Update {
       seqIndexMoved =>
         LoggingValue.Nested.fromEntries(
           Logging.synchronizerId(seqIndexMoved.synchronizerId),
-          "sequencerCounter" -> seqIndexMoved.sequencerCounter.unwrap,
           "sequencerTimestamp" -> seqIndexMoved.recordTime.toInstant,
         )
   }
@@ -633,8 +616,8 @@ object Update {
     def updateId(id: data.UpdateId): LoggingEntry =
       "updateId" -> id
 
-    def applicationId(id: Ref.ApplicationId): LoggingEntry =
-      "applicationId" -> id
+    def userId(id: Ref.UserId): LoggingEntry =
+      "userId" -> id
 
     def workflowIdOpt(id: Option[Ref.WorkflowId]): LoggingEntry =
       "workflowId" -> id

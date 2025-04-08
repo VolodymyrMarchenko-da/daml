@@ -139,7 +139,7 @@ object PekkoUtil extends HasLoggerName {
   ): ExecutionSequencerFactory =
     new PekkoExecutionSequencerPool(
       namePrefix + "-execution-sequencer",
-      actorCount = Threading.detectNumberOfThreads(logger),
+      actorCount = Threading.detectNumberOfThreads(logger).value,
     )
 
   /** Remembers the last `memory` many elements that have already been emitted previously. Passes
@@ -1036,10 +1036,10 @@ object PekkoUtil extends HasLoggerName {
 
   sealed abstract class ContextualizedFlowOpsImpl {
     type ContextualizedFlowOps[+Context[+_], +A, +Mat] <: FlowOps[Context[A], Mat]
-    type ContextualizedSource[+Context[+_], +A, +Mat] <: Source[Context[A], Mat] &
-      ContextualizedFlowOps[Context, A, Mat]
-    type ContextualizedFlow[+Context[+_], -A, +B, +Mat] <: Flow[A, Context[B], Mat] &
-      ContextualizedFlowOps[Context, B, Mat]
+    type ContextualizedSource[+Context[+_], +A, +Mat]
+      <: Source[Context[A], Mat] & ContextualizedFlowOps[Context, A, Mat]
+    type ContextualizedFlow[+Context[+_], -A, +B, +Mat]
+      <: Flow[A, Context[B], Mat] & ContextualizedFlowOps[Context, B, Mat]
 
     def substFlowOps[K[_[_]], Context[+_], Mat](
         ff: K[Lambda[a => FlowOps[Context[a], Mat]]]

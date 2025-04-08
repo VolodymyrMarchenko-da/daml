@@ -23,11 +23,15 @@ object DbLockConfig {
     CantonConfigValidatorDerivation[DbLockConfig]
 
   /** For locks to be supported we must be using an [[DbConfig]] with it set to Postgres. */
-  // TODO(#22351) Reenable this check for the enterprise/community distinction?
   private[canton] def isSupportedConfig(config: StorageConfig): Boolean =
     PartialFunction.cond(config) { case _: DbConfig.Postgres =>
       true
     }
+
+  // we need to preallocate a range of lock counters for concurrently running sequencer writers
+  // this actually sets the limit of the number of concurrent sequencers that we allow
+  val MAX_SEQUENCER_WRITERS_AVAILABLE = 32
+
 }
 
 /** Configuration of a DB-locked connection, i.e., a database connection with an associated DB lock.

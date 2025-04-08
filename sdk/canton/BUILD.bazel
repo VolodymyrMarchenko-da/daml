@@ -20,7 +20,9 @@ load(
     "da_scala_macro_library",
     "da_scala_test",
     "da_scala_test_suite",
+    "default_scalacopts",
     "kind_projector_plugin",
+    "lf_scalacopts_stricter",
     "scala_source_jar",
     "scaladoc_jar",
 )
@@ -67,13 +69,13 @@ scala_library(
     srcs = [":community_buildinfo_src"],
 )
 
-### base/daml-errors ###
+### base/errors ###
 
 da_scala_library(
-    name = "base_daml-errors",
-    srcs = glob(["base/daml-errors/src/main/**/*.scala"]),
+    name = "base_errors",
+    srcs = glob(["base/errors/src/main/**/*.scala"]),
     override_scalacopts = canton_scalacopts + ["-language:postfixOps"],
-    tags = ["maven_coordinates=com.daml:base-daml-errors:__VERSION__"],
+    tags = ["maven_coordinates=com.daml:base-errors:__VERSION__"],
     unused_dependency_checker_mode = "error",
     visibility = [
         "//daml-lf/validation:__subpackages__",
@@ -254,7 +256,7 @@ da_scala_library(
         "//test-common/canton:__subpackages__",
     ],
     deps = [
-        ":base_daml-errors",
+        ":base_errors",
         ":pekko-stream-minus-patched-classes",
         "//daml-lf/data",
         "//libs-scala/contextualized-logging",
@@ -304,7 +306,7 @@ da_scala_library(
         "//test-common/canton:__subpackages__",
     ],
     deps = [
-        ":base_daml-errors",
+        ":base_errors",
         ":ledger_api_proto_scala",
         ":pekko-stream-minus-patched-classes",
         "@maven//:com_chuusai_shapeless_2_13",
@@ -334,16 +336,11 @@ da_scala_library(
     tags = ["maven_coordinates=com.daml:base-util-external:__VERSION__"],
     unused_dependency_checker_mode = "error",
     deps = [
-        ":base_daml-errors",
-        ":ledger_api_proto_scala",
         "@maven//:com_chuusai_shapeless_2_13",
         "@maven//:com_github_pureconfig_pureconfig_core_2_13",
         "@maven//:com_github_pureconfig_pureconfig_generic_2_13",
-        "@maven//:com_thesamet_scalapb_scalapb_runtime_2_13",
         "@maven//:com_typesafe_config",
         "@maven//:com_typesafe_slick_slick_2_13",
-        "@maven//:io_grpc_grpc_api",
-        "@maven//:org_slf4j_slf4j_api",
         "@maven//:org_typelevel_cats_core_2_13",
         "@maven//:org_typelevel_cats_kernel_2_13",
     ],
@@ -390,7 +387,7 @@ da_scala_library(
         "//test-common/canton:__subpackages__",
     ],
     deps = [
-        ":base_daml-errors",
+        ":base_errors",
         ":base_grpc-utils",
         ":base_util-external",
         ":community_util-logging",
@@ -463,19 +460,45 @@ filegroup(
     visibility = ["//daml-script:__subpackages__"],
 )
 
-scala_library(
+da_scala_library(
     name = "community_admin-api",
     srcs = [":community_admin-api-src"],
-    scalacopts = canton_scalacopts + ["-language:postfixOps"],
+    override_scalacopts = canton_scalacopts + [
+        copt
+        for copt in default_scalacopts + lf_scalacopts_stricter
+        if copt not in [
+            # ProtocolVersionAnnotation.scala violates this warning
+            "-P:wartremover:traverser:org.wartremover.warts.LeakingSealed",
+        ]
+    ],
+    tags = ["maven_coordinates=com.daml:community-admin-api:__VERSION__"],
     visibility = ["//daml-lf/validation:__subpackages__"],
 )
 
 ### community/base ###
 
-proto_library(
+proto_jars(
     name = "community_base_proto",
-    srcs = glob(["community/base/src/main/protobuf/**/*.proto"]),
+    srcs = glob(
+        ["community/base/src/main/protobuf/**/*.proto"],
+        # @scalapb//:scalapb_proto, which is required by proto_jars, defines a competing package.proto for the
+        # google.rpc package. Even though the two files agree, this is rejected by scalapb. Thus we exclude
+        # the one defined by the canton repo.
+        exclude = ["community/base/src/main/protobuf/google/rpc/package.proto"],
+    ),
+    # The code of canton assumes that these protos are generated with the flat_package option.
+    flat_package = True,
+    grpc = True,
+    java_deps = [
+        "@maven//:com_thesamet_scalapb_scalapb_runtime_2_13",
+        "@maven//:com_google_api_grpc_proto_google_common_protos",
+    ],
+    maven_artifact_prefix = "community-base",
+    maven_artifact_scala_suffix = "scalapb",
+    maven_group = "com.daml",
+    scala_deps = [":community_admin-api"],
     strip_import_prefix = "community/base/src/main/protobuf",
+    visibility = ["//visibility:public"],
     deps = [
         "@com_google_protobuf//:duration_proto",
         "@com_google_protobuf//:empty_proto",
@@ -486,20 +509,9 @@ proto_library(
     ],
 )
 
-proto_gen(
-    name = "community_base_proto_scala",
-    srcs = [":community_base_proto"],
-    plugin_exec = "//scala-protoc-plugins/scalapb:protoc-gen-scalapb",
-    plugin_name = "scalapb",
-    plugin_options = [
-        "flat_package",
-        "grpc",
-    ],
-)
-
 scala_library(
     name = "community_base",
-    srcs = glob(["community/base/src/main/scala/**/*.scala"]) + [":community_base_proto_scala"] + [":community_admin-api_proto_scala"],
+    srcs = glob(["community/base/src/main/scala/**/*.scala"]) + [":community_admin-api_proto_scala"],
     plugins = [kind_projector_plugin],
     resource_strip_prefix = "canton/community/base/src/main/resources",
     resources = glob(["community/base/src/main/resources/**"]),
@@ -515,13 +527,14 @@ scala_library(
         "@maven//:org_apache_pekko_pekko_slf4j_2_13",
     ],
     deps = [
-        ":base_daml-errors",
         ":base_daml-jwt",
         ":base_daml-tls",
+        ":base_errors",
         ":base_grpc-utils",
         ":base_util-external",
         ":bindings-java",
         ":community_admin-api",
+        ":community_base_proto_scala",
         ":community_buildinfo",
         ":community_kms-driver-api",
         ":community_lib_slick_slick-fork",
@@ -613,11 +626,12 @@ scala_library(
         "@maven//:org_apache_pekko_pekko_slf4j_2_13",
     ],
     deps = [
-        ":base_daml-errors",
         ":base_daml-jwt",
+        ":base_errors",
         ":base_util-external",
         ":community_admin-api",
         ":community_base",
+        ":community_base_proto_scala",
         ":community_buildinfo",
         ":community_lib_Blake2b",
         ":community_lib_slick_slick-fork",
@@ -694,7 +708,10 @@ proto_library(
 
 proto_gen(
     name = "community_ledger_ledger-api-core_proto_scala",
-    srcs = [":community_ledger_ledger-api-core_proto"],
+    srcs = [
+        ":community_ledger_ledger-api-core_proto",
+        "@com_github_grpc_grpc//src/proto/grpc/health/v1:health_proto_descriptor",
+    ],
     plugin_exec = "//scala-protoc-plugins/scalapb:protoc-gen-scalapb",
     plugin_name = "scalapb",
     plugin_options = [
@@ -737,9 +754,9 @@ scala_library(
         "//language-support/java:__subpackages__",
     ],
     deps = [
-        ":base_daml-errors",
         ":base_daml-jwt",
         ":base_daml-tls",
+        ":base_errors",
         ":base_util-external",
         ":bindings-java",
         ":community_base",
@@ -793,6 +810,8 @@ scala_library(
         "@maven//:com_typesafe_scala_logging_scala_logging_2_13",
         "@maven//:com_typesafe_slick_slick_2_13",
         "@maven//:com_zaxxer_HikariCP",
+        "@maven//:dev_optics_monocle_core_2_13",
+        "@maven//:dev_optics_monocle_macro_2_13",
         "@maven//:io_circe_circe_core_2_13",
         "@maven//:io_grpc_grpc_api",
         "@maven//:io_grpc_grpc_inprocess",
@@ -832,8 +851,8 @@ scala_library(
     scalacopts = canton_scalacopts + ["-language:postfixOps"],
     unused_dependency_checker_mode = "error",
     deps = [
-        ":base_daml-errors",
         ":base_daml-jwt",
+        ":base_errors",
         ":base_util-external",
         ":bindings-java",
         ":community_base",
@@ -878,6 +897,7 @@ scala_library(
         "@maven//:com_lihaoyi_ujson_circe_2_13",
         "@maven//:com_lihaoyi_upickle_core_2_13",
         "@maven//:com_softwaremill_magnolia1_2_magnolia_2_13",
+        "@maven//:com_softwaremill_sttp_apispec_apispec_model_2_13",
         "@maven//:com_softwaremill_sttp_apispec_asyncapi_circe_yaml_2_13",
         "@maven//:com_softwaremill_sttp_apispec_asyncapi_model_2_13",
         "@maven//:com_softwaremill_sttp_apispec_openapi_circe_yaml_2_13",
@@ -901,8 +921,11 @@ scala_library(
         "@maven//:io_circe_circe_parser_2_13",
         "@maven//:io_grpc_grpc_api",
         "@maven//:io_grpc_grpc_stub",
+        "@maven//:io_protostuff_protostuff_compiler",
+        "@maven//:io_protostuff_protostuff_parser",
         "@maven//:io_spray_spray_json_2_13",
         "@maven//:junit_junit",
+        "@maven//:org_antlr_antlr4_runtime",  # needed for io_protostuff_protostuff_parser
         "@maven//:org_apache_pekko_pekko_actor_2_13",
         "@maven//:org_apache_pekko_pekko_http_2_13",
         "@maven//:org_apache_pekko_pekko_http_core_2_13",
@@ -976,11 +999,12 @@ scala_library(
     scalacopts = canton_scalacopts + ["-language:postfixOps"],
     unused_dependency_checker_mode = "error",
     deps = [
-        ":base_daml-errors",
         ":base_daml-jwt",
+        ":base_errors",
         ":base_util-external",
         ":community_admin-api",
         ":community_base",
+        ":community_base_proto_scala",
         ":community_common",
         ":community_lib_slick_slick-fork",
         ":community_lib_wartremover",
@@ -1105,13 +1129,14 @@ scala_library(
         "@maven//:io_netty_netty_handler",
     ],
     deps = [
-        ":base_daml-errors",
         ":base_daml-jwt",
         ":base_daml-tls",
+        ":base_errors",
         ":base_util-external",
         ":bindings-java",
         ":community_admin-api",
         ":community_base",
+        ":community_base_proto_scala",
         ":community_common",
         ":community_ledger_ledger-api-core",
         ":community_ledger_ledger-common",
@@ -1206,7 +1231,7 @@ scala_library(
     scalacopts = canton_scalacopts + ["-language:postfixOps"],
     unused_dependency_checker_mode = "error",
     deps = [
-        ":base_daml-errors",
+        ":base_errors",
         ":base_util-external",
         ":community_base",
         ":community_lib_slick_slick-fork",
@@ -1296,13 +1321,14 @@ scala_library(
     unused_dependency_checker_mode = "error",
     runtime_deps = [":community_reference-driver"],
     deps = [
-        ":base_daml-errors",
         ":base_daml-jwt",
+        ":base_errors",
         ":base_grpc-utils",
         ":base_util-external",
         ":bindings-java",
         ":community_admin-api",
         ":community_base",
+        ":community_base_proto_scala",
         ":community_common",
         ":community_kms-driver-api",
         ":community_ledger_ledger-api-core",
@@ -1396,8 +1422,8 @@ scala_library(
         "@maven//:org_codehaus_janino_janino",  # for parsing conditionals in logback configuration
     ],
     deps = [
-        ":base_daml-errors",
         ":base_daml-jwt",
+        ":base_errors",
         ":base_util-external",
         ":community_app-base",
         ":community_base",
@@ -1409,10 +1435,9 @@ scala_library(
         ":community_participant",
         ":community_synchronizer",
         ":community_util-logging",
+        ":ledger_api_proto_scala",
         "//daml-lf/data",
         "//libs-scala/nonempty",
-        "//libs-scala/rs-grpc-bridge",
-        "//observability/metrics",
         "@maven//:ch_qos_logback_logback_classic",
         "@maven//:ch_qos_logback_logback_core",
         "@maven//:com_github_pathikrit_better_files_2_13",
@@ -1431,9 +1456,7 @@ scala_library(
         "@maven//:com_typesafe_config",
         "@maven//:com_typesafe_scala_logging_scala_logging_2_13",
         "@maven//:io_get_coursier_interface",
-        "@maven//:io_opentelemetry_opentelemetry_api",
         "@maven//:junit_junit",
-        "@maven//:org_apache_pekko_pekko_actor_2_13",
         "@maven//:org_scalaz_scalaz_core_2_13",
         "@maven//:org_slf4j_slf4j_api",
         "@maven//:org_tpolecat_typename_2_13",
@@ -1844,35 +1867,5 @@ da_haskell_library(
         "text",
         "vector",
     ],
-    visibility = ["//visibility:public"],
-)
-
-proto_gen(
-    name = "ledger-api-docs-proto",
-    srcs = [":ledger_api_proto"],
-    plugin_exec = "@com_github_pseudomuto_protoc_gen_doc//cmd/protoc-gen-doc:protoc-gen-doc",
-    plugin_name = "doc",
-    plugin_options = [
-        ledger_api_root + "/docs/rst_mmd.tmpl",
-        "docs.rst",
-    ],
-    # this is _slightly_ hacky. we need to include the markdown template in the plugin_runfiles
-    # and refer to the file with a workspace relative path in plugin_options
-    plugin_runfiles = ["community/ledger-api/docs/rst_mmd.tmpl"],
-    visibility = [
-        "//visibility:public",
-    ],
-)
-
-genrule(
-    name = "ledger-api-docs",
-    srcs = [":ledger-api-docs-proto"],
-    outs = ["proto-docs.rst"],
-    cmd = """
-        unzip -q $(location :ledger-api-docs-proto)
-        $(location community/ledger-api/docs/post-process.sh)
-        mv docs.rst '$@'
-    """,
-    tools = ["community/ledger-api/docs/post-process.sh"],
     visibility = ["//visibility:public"],
 )

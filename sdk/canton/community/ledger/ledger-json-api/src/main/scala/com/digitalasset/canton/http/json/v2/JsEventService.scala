@@ -44,7 +44,6 @@ class JsEventService(
   ): TracedInput[event_query_service.GetEventsByContractIdRequest] => Future[
     Either[JsCantonError, JsGetEventsByContractIdResponse]
   ] = req => {
-    implicit val token = callerContext.token()
     implicit val tc = req.traceContext
     eventServiceClient(callerContext.token())(req.traceContext)
       .getEventsByContractId(req.in)
@@ -83,7 +82,8 @@ object JsEventService extends DocumentationEndpoints {
   )
 }
 object JsEventServiceCodecs {
-  import JsStateServiceCodecs.eventFormatRW
+  import JsSchema.JsServicesCommonCodecs.eventFormatRW
+
   implicit val jsCreatedRW: Codec[JsCreated] = deriveCodec
   implicit val jsArchivedRW: Codec[JsArchived] = deriveCodec
   implicit val jsGetEventsByContractIdResponseRW: Codec[JsGetEventsByContractIdResponse] =

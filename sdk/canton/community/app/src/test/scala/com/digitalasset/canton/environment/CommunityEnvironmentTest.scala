@@ -5,27 +5,52 @@ package com.digitalasset.canton.environment
 
 import cats.data.EitherT
 import cats.syntax.either.*
+import com.daml.grpc.adapter.ExecutionSequencerFactory
 import com.daml.metrics.api.noop.NoOpMetricsFactory
 import com.daml.metrics.api.{HistogramInventory, MetricName}
+import com.digitalasset.canton.concurrent.ExecutionContextIdlenessExecutorService
 import com.digitalasset.canton.config.CantonRequireTypes.InstanceName
 import com.digitalasset.canton.config.RequireTypes.Port
-import com.digitalasset.canton.config.{CantonCommunityConfig, TestingConfigInternal}
-import com.digitalasset.canton.integration.CommunityConfigTransforms
+import com.digitalasset.canton.config.{CantonConfig, CommunityCantonEdition, TestingConfigInternal}
+import com.digitalasset.canton.integration.ConfigTransforms
 import com.digitalasset.canton.lifecycle.{CloseContext, FlagCloseable, FutureUnlessShutdown}
 import com.digitalasset.canton.participant.config.*
 import com.digitalasset.canton.participant.metrics.{ParticipantHistograms, ParticipantMetrics}
 import com.digitalasset.canton.participant.sync.SyncServiceError
-import com.digitalasset.canton.participant.{ParticipantNode, ParticipantNodeBootstrap}
-import com.digitalasset.canton.synchronizer.mediator.{MediatorNodeBootstrap, MediatorNodeConfig}
-import com.digitalasset.canton.synchronizer.sequencer.SequencerNodeBootstrap
-import com.digitalasset.canton.synchronizer.sequencer.config.CommunitySequencerNodeConfig
+import com.digitalasset.canton.participant.{
+  CantonLedgerApiServerFactory,
+  ParticipantNode,
+  ParticipantNodeBootstrap,
+  ParticipantNodeBootstrapFactory,
+  ParticipantNodeParameters,
+}
+import com.digitalasset.canton.resource.CommunityDbMigrationsMetaFactory
+import com.digitalasset.canton.synchronizer.mediator.{
+  MediatorNodeBootstrap,
+  MediatorNodeBootstrapFactory,
+  MediatorNodeConfig,
+  MediatorNodeParameters,
+}
+import com.digitalasset.canton.synchronizer.metrics.{MediatorMetrics, SequencerMetrics}
+import com.digitalasset.canton.synchronizer.sequencer.config.{
+  SequencerNodeConfig,
+  SequencerNodeParameters,
+}
+import com.digitalasset.canton.synchronizer.sequencer.{
+  SequencerNodeBootstrap,
+  SequencerNodeBootstrapFactory,
+}
+import com.digitalasset.canton.time.TestingTimeService
 import com.digitalasset.canton.tracing.TraceContext
 import com.digitalasset.canton.{BaseTest, ConfigStubs, HasExecutionContext}
+import com.digitalasset.daml.lf.engine.Engine
 import monocle.macros.syntax.lens.*
+import org.apache.pekko.actor.ActorSystem
 import org.mockito.ArgumentMatchers
 import org.mockito.ArgumentMatchers.anyString
 import org.scalatest.wordspec.AnyWordSpec
 
+import java.util.concurrent.ScheduledExecutorService
 import scala.concurrent.{ExecutionContext, Future}
 
 class CommunityEnvironmentTest extends AnyWordSpec with BaseTest with HasExecutionContext {
@@ -33,7 +58,7 @@ class CommunityEnvironmentTest extends AnyWordSpec with BaseTest with HasExecuti
   lazy val participant1Config: LocalParticipantConfig = ConfigStubs.participant
   lazy val participant2Config: LocalParticipantConfig = ConfigStubs.participant
 
-  lazy val sampleConfig: CantonCommunityConfig = CantonCommunityConfig(
+  lazy val sampleConfig: CantonConfig = CantonConfig(
     sequencers = Map(
       InstanceName.tryCreate("s1") -> ConfigStubs.sequencer,
       InstanceName.tryCreate("s2") -> ConfigStubs.sequencer,
@@ -53,12 +78,12 @@ class CommunityEnvironmentTest extends AnyWordSpec with BaseTest with HasExecuti
   }
 
   trait TestEnvironment {
-    def config: CantonCommunityConfig = sampleConfig
+    def config: CantonConfig = sampleConfig
 
     private val createParticipantMock =
       mock[(String, LocalParticipantConfig) => ParticipantNodeBootstrap]
     private val createSequencerMock =
-      mock[(String, CommunitySequencerNodeConfig) => SequencerNodeBootstrap]
+      mock[(String, SequencerNodeConfig) => SequencerNodeBootstrap]
     private val createMediatorMock =
       mock[(String, MediatorNodeConfig) => MediatorNodeBootstrap]
 
@@ -100,29 +125,69 @@ class CommunityEnvironmentTest extends AnyWordSpec with BaseTest with HasExecuti
     }
     def mockParticipant: ParticipantNodeBootstrap = mockParticipantAndNode._1
 
-    val environment = new CommunityEnvironment(
+    val environment = new Environment(
       config,
+      CommunityCantonEdition,
       TestingConfigInternal(initializeGlobalOpenTelemetry = false),
+      new ParticipantNodeBootstrapFactory {
+        override protected def createLedgerApiServerFactory(
+            arguments: this.Arguments,
+            engine: Engine,
+            testingTimeService: TestingTimeService,
+        )(implicit
+            executionContext: ExecutionContextIdlenessExecutorService,
+            actorSystem: ActorSystem,
+        ): CantonLedgerApiServerFactory = mock[CantonLedgerApiServerFactory]
+
+        override def create(
+            arguments: NodeFactoryArguments[
+              LocalParticipantConfig,
+              ParticipantNodeParameters,
+              ParticipantMetrics,
+            ],
+            testingTimeService: TestingTimeService,
+        )(implicit
+            executionContext: ExecutionContextIdlenessExecutorService,
+            scheduler: ScheduledExecutorService,
+            actorSystem: ActorSystem,
+            executionSequencerFactory: ExecutionSequencerFactory,
+        ): Either[String, ParticipantNodeBootstrap] = Right(
+          createParticipantMock(arguments.name, arguments.config)
+        )
+      },
+      new SequencerNodeBootstrapFactory {
+
+        override def create(
+            arguments: NodeFactoryArguments[
+              SequencerNodeConfig,
+              SequencerNodeParameters,
+              SequencerMetrics,
+            ]
+        )(implicit
+            executionContext: ExecutionContextIdlenessExecutorService,
+            scheduler: ScheduledExecutorService,
+            actorSystem: ActorSystem,
+        ): Either[String, SequencerNodeBootstrap] =
+          Right(createSequencerMock(arguments.name, arguments.config))
+      },
+      new MediatorNodeBootstrapFactory {
+        override def create(
+            arguments: NodeFactoryArguments[
+              MediatorNodeConfig,
+              MediatorNodeParameters,
+              MediatorMetrics,
+            ]
+        )(implicit
+            executionContext: ExecutionContextIdlenessExecutorService,
+            scheduler: ScheduledExecutorService,
+            executionSequencerFactory: ExecutionSequencerFactory,
+            actorSystem: ActorSystem,
+        ): Either[String, MediatorNodeBootstrap] =
+          Right(createMediatorMock(arguments.name, arguments.config))
+      },
+      new CommunityDbMigrationsMetaFactory(loggerFactory),
       loggerFactory,
-    ) {
-      override def createParticipant(
-          name: String,
-          participantConfig: LocalParticipantConfig,
-      ): ParticipantNodeBootstrap =
-        createParticipantMock(name, participantConfig)
-
-      override def createSequencer(
-          name: String,
-          sequencerConfig: CommunitySequencerNodeConfig,
-      ): SequencerNodeBootstrap =
-        createSequencerMock(name, sequencerConfig)
-
-      override def createMediator(
-          name: String,
-          mediatorConfig: MediatorNodeConfig,
-      ): MediatorNodeBootstrap =
-        createMediatorMock(name, mediatorConfig)
-    }
+    )
 
     protected def setupParticipantFactory(create: => ParticipantNodeBootstrap): Unit =
       setupParticipantFactoryInternal(anyString(), create)
@@ -137,7 +202,7 @@ class CommunityEnvironmentTest extends AnyWordSpec with BaseTest with HasExecuti
       when(createParticipantMock(idMatcher, any[LocalParticipantConfig])).thenAnswer(create)
 
     protected def setupSequencerFactory(id: String, create: => SequencerNodeBootstrap): Unit =
-      when(createSequencerMock(eqTo(id), any[CommunitySequencerNodeConfig])).thenAnswer(create)
+      when(createSequencerMock(eqTo(id), any[SequencerNodeConfig])).thenAnswer(create)
 
     protected def setupMediatorFactory(id: String, create: => MediatorNodeBootstrap): Unit =
       when(createMediatorMock(eqTo(id), any[MediatorNodeConfig])).thenAnswer(create)
@@ -163,9 +228,9 @@ class CommunityEnvironmentTest extends AnyWordSpec with BaseTest with HasExecuti
 
       "write ports file if desired" in new TestEnvironment {
 
-        override def config: CantonCommunityConfig = {
+        override def config: CantonConfig = {
           val tmp = sampleConfig.focus(_.parameters.portsFile).replace(Some("my-ports.txt"))
-          (CommunityConfigTransforms.updateAllParticipantConfigs { case (_, config) =>
+          (ConfigTransforms.updateAllParticipantConfigs { case (_, config) =>
             config
               .focus(_.ledgerApi)
               .replace(LedgerApiServerConfig(internalPort = Some(Port.tryCreate(42))))
@@ -191,7 +256,7 @@ class CommunityEnvironmentTest extends AnyWordSpec with BaseTest with HasExecuti
       }
 
       "not start if manual start is desired" in new TestEnvironment {
-        override def config: CantonCommunityConfig =
+        override def config: CantonConfig =
           sampleConfig.focus(_.parameters.manualStart).replace(true)
 
         // These would throw on start, as all methods return null.

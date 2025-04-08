@@ -24,8 +24,9 @@ import scala.concurrent.ExecutionContext
 
 object ParallelMessageDispatcherFactory
     extends MessageDispatcher.Factory[ParallelMessageDispatcher] {
-  // Process only transactions asynchronously
-  private def processAsynchronously(viewType: ViewType): Boolean = viewType == TransactionViewType
+  // Process transactions and reassignments asynchronously
+  private def processAsynchronously(viewType: ViewType): Boolean =
+    viewType == TransactionViewType || viewType == ViewType.UnassignmentViewType || viewType == ViewType.AssignmentViewType
 
   override def create(
       protocolVersion: ProtocolVersion,
@@ -39,7 +40,6 @@ object ParallelMessageDispatcherFactory
       requestCounterAllocator: RequestCounterAllocator,
       recordOrderPublisher: RecordOrderPublisher,
       badRootHashMessagesRequestProcessor: BadRootHashMessagesRequestProcessor,
-      repairProcessor: RepairProcessor,
       inFlightSubmissionSynchronizerTracker: InFlightSubmissionSynchronizerTracker,
       loggerFactory: NamedLoggerFactory,
       metrics: ConnectedSynchronizerMetrics,
@@ -56,7 +56,6 @@ object ParallelMessageDispatcherFactory
       requestCounterAllocator,
       recordOrderPublisher,
       badRootHashMessagesRequestProcessor,
-      repairProcessor,
       inFlightSubmissionSynchronizerTracker,
       processAsynchronously,
       loggerFactory,

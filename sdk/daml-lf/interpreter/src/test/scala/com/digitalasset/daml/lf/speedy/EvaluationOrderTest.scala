@@ -349,10 +349,9 @@ abstract class EvaluationOrderTest(languageVersion: LanguageVersion)
     Versioned(
       testTxVersion,
       Value.ContractInstance(
-        pkg.pkgName,
-        pkg.pkgVersion,
-        T,
-        Value.ValueRecord(
+        packageName = pkg.pkgName,
+        template = T,
+        arg = Value.ValueRecord(
           None,
           ImmArray(
             None -> Value.ValueParty(alice),
@@ -372,7 +371,6 @@ abstract class EvaluationOrderTest(languageVersion: LanguageVersion)
       Speedy.ContractInfo(
         version = TransactionVersion.minVersion,
         packageName = pkg.pkgName,
-        packageVersion = pkg.pkgVersion,
         templateId = Dummy,
         value = SRecord(
           Dummy,
@@ -391,7 +389,6 @@ abstract class EvaluationOrderTest(languageVersion: LanguageVersion)
     testTxVersion,
     Value.ContractInstance(
       packageName = pkg.pkgName,
-      packageVersion = pkg.pkgVersion,
       template = Helper,
       arg = ValueRecord(
         None,
@@ -404,7 +401,6 @@ abstract class EvaluationOrderTest(languageVersion: LanguageVersion)
     testTxVersion,
     Value.ContractInstance(
       packageName = pkg.pkgName,
-      packageVersion = pkg.pkgVersion,
       template = Human,
       arg = Value.ValueRecord(
         None,
@@ -432,7 +428,6 @@ abstract class EvaluationOrderTest(languageVersion: LanguageVersion)
     testTxVersion,
     Value.ContractInstance(
       packageName = pkg.pkgName,
-      packageVersion = pkg.pkgVersion,
       template = Dummy,
       arg = ValueRecord(None, ImmArray(None -> ValueParty(alice))),
     ),
@@ -1781,7 +1776,6 @@ abstract class EvaluationOrderTest(languageVersion: LanguageVersion)
                 "contract observers",
                 "key",
                 "maintainers",
-                "view",
                 "interface guard",
                 "interface choice controllers",
                 "interface choice observers",
@@ -1848,7 +1842,6 @@ abstract class EvaluationOrderTest(languageVersion: LanguageVersion)
                   "contract observers",
                   "key",
                   "maintainers",
-                  "view",
                   "interface guard",
                   "interface choice controllers",
                   "interface choice observers",
@@ -1874,7 +1867,6 @@ abstract class EvaluationOrderTest(languageVersion: LanguageVersion)
             inside(res) { case Success(Right(_)) =>
               msgs shouldBe buildLog(
                 "starts test",
-                "view",
                 "interface guard",
                 "interface choice controllers",
                 "interface choice observers",
@@ -1977,7 +1969,6 @@ abstract class EvaluationOrderTest(languageVersion: LanguageVersion)
                 requiredParties shouldBe Set(alice)
                 msgs shouldBe buildLog(
                   "starts test",
-                  "view",
                   "interface guard",
                   "interface choice controllers",
                   "interface choice observers",
@@ -2002,7 +1993,6 @@ abstract class EvaluationOrderTest(languageVersion: LanguageVersion)
             inside(res) { case Success(Right(_)) =>
               msgs shouldBe buildLog(
                 "starts test",
-                "view",
                 "interface guard",
                 "interface choice controllers",
                 "interface choice observers",
@@ -2109,7 +2099,6 @@ abstract class EvaluationOrderTest(languageVersion: LanguageVersion)
                 requiredParties shouldBe Set(bob)
                 msgs shouldBe buildLog(
                   "starts test",
-                  "view",
                   "interface guard",
                   "interface choice controllers",
                   "interface choice observers",
@@ -2772,7 +2761,6 @@ abstract class EvaluationOrderTest(languageVersion: LanguageVersion)
               "contract observers",
               "key",
               "maintainers",
-              "view",
               "ends test",
             )
           }
@@ -2828,7 +2816,6 @@ abstract class EvaluationOrderTest(languageVersion: LanguageVersion)
                 "contract observers",
                 "key",
                 "maintainers",
-                "view",
               )
           }
         }
@@ -2849,7 +2836,7 @@ abstract class EvaluationOrderTest(languageVersion: LanguageVersion)
             getContract = getIfaceContract,
           )
           inside(res) { case Success(Right(_)) =>
-            msgs shouldBe Seq("starts test", "view", "ends test")
+            msgs shouldBe Seq("starts test", "ends test")
           }
         }
 
@@ -2933,7 +2920,7 @@ abstract class EvaluationOrderTest(languageVersion: LanguageVersion)
                 ) =>
               stakeholders shouldBe Set(alice, bob)
               authorizingParties shouldBe Set(charlie)
-              msgs shouldBe Seq("starts test", "view")
+              msgs shouldBe Seq("starts test")
           }
         }
       }
@@ -2951,7 +2938,7 @@ abstract class EvaluationOrderTest(languageVersion: LanguageVersion)
             Set(alice),
           )
           inside(res) { case Success(Right(_)) =>
-            msgs shouldBe Seq("starts test", "view", "ends test")
+            msgs shouldBe Seq("starts test", "ends test")
           }
         }
 
@@ -3035,7 +3022,7 @@ abstract class EvaluationOrderTest(languageVersion: LanguageVersion)
                 ) =>
               stakeholders shouldBe Set(alice, bob)
               authorizingParties shouldBe Set(charlie)
-              msgs shouldBe Seq("starts test", "view")
+              msgs shouldBe Seq("starts test")
           }
         }
       }

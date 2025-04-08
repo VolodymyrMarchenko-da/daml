@@ -3,7 +3,6 @@
 
 package com.digitalasset.canton.platform.apiserver.services.admin
 
-import com.daml.error.ContextualizedErrorLogger
 import com.daml.ledger.api.v2.admin.command_inspection_service.*
 import com.daml.tracing.Telemetry
 import com.digitalasset.canton.ledger.api.ValidationLogger
@@ -12,6 +11,7 @@ import com.digitalasset.canton.ledger.api.services.CommandInspectionService
 import com.digitalasset.canton.ledger.api.validation.CommandInspectionServiceRequestValidator
 import com.digitalasset.canton.logging.LoggingContextWithTrace.implicitExtractTraceContext
 import com.digitalasset.canton.logging.{
+  ContextualizedErrorLogger,
   ErrorLoggingContext,
   LoggingContextWithTrace,
   NamedLoggerFactory,

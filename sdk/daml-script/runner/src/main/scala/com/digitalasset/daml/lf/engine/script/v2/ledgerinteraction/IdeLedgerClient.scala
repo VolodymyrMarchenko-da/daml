@@ -323,6 +323,7 @@ class IdeLedgerClient(
           Some(SubmitError.ContractNotFound.AdditionalInfo.NotFound()),
         )
       case ContractKeyNotFound(key) => SubmitError.ContractKeyNotFound(key)
+      case UnresolvedPackageName(packageName) => SubmitError.UnresolvedPackageName(packageName)
       case e: FailedAuthorization =>
         SubmitError.AuthorizationError(Pretty.prettyDamlException(e).renderWideStream.mkString)
       case ContractNotActive(cid, tid, _) =>
@@ -354,6 +355,7 @@ class IdeLedgerClient(
       case ContractIdInContractKey(_) => SubmitError.ContractIdInContractKey()
       case ContractIdComparability(cid) => SubmitError.ContractIdComparability(cid.toString)
       case ValueNesting(limit) => SubmitError.ValueNesting(limit)
+      case e: FailureStatus => SubmitError.FailureStatusError(e, None)
       case e @ Upgrade(innerError: Upgrade.ValidationFailed) =>
         SubmitError.UpgradeError.ValidationFailed(
           innerError.coid,
@@ -375,12 +377,19 @@ class IdeLedgerClient(
           innerError.expectedType.pretty,
           Pretty.prettyDamlException(e).renderWideStream.mkString,
         )
-      case e @ Upgrade(innerError: Upgrade.ViewMismatch) =>
-        SubmitError.UpgradeError.ViewMismatch(
-          innerError.coid,
-          innerError.iterfaceId,
-          innerError.srcTemplateId,
-          innerError.dstTemplateId,
+      case e @ CCTP(innerError: CCTP.MalformedByteEncoding) =>
+        SubmitError.CryptoError.MalformedByteEncoding(
+          innerError.value,
+          Pretty.prettyDamlException(e).renderWideStream.mkString,
+        )
+      case e @ CCTP(innerError: CCTP.MalformedKey) =>
+        SubmitError.CryptoError.MalformedKey(
+          innerError.key,
+          Pretty.prettyDamlException(e).renderWideStream.mkString,
+        )
+      case e @ CCTP(innerError: CCTP.MalformedSignature) =>
+        SubmitError.CryptoError.MalformedSignature(
+          innerError.signature,
           Pretty.prettyDamlException(e).renderWideStream.mkString,
         )
       case e @ Dev(_, innerError) =>
@@ -1013,17 +1022,4 @@ class IdeLedgerClient(
       mat: Materializer,
   ): Future[List[ScriptLedgerClient.ReadablePackageId]] =
     Future.successful(getPackageIdMap().keys.toList)
-
-  // TODO(#17708): Support vetting/unvetting DARs in IDELedgerClient
-  override def vetDar(name: String)(implicit
-      ec: ExecutionContext,
-      esf: ExecutionSequencerFactory,
-      mat: Materializer,
-  ): Future[Unit] = unsupportedOn("vetDar")
-
-  override def unvetDar(name: String)(implicit
-      ec: ExecutionContext,
-      esf: ExecutionSequencerFactory,
-      mat: Materializer,
-  ): Future[Unit] = unsupportedOn("unvetDar")
 }

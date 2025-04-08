@@ -7,6 +7,7 @@ import com.daml.ledger.api.v2.event as apiEvent
 import com.daml.ledger.api.v2.reassignment.{
   AssignedEvent as ApiAssignedEvent,
   Reassignment as ApiReassignment,
+  ReassignmentEvent as ApiReassignmentEvent,
   UnassignedEvent as ApiUnassignedEvent,
 }
 import com.daml.ledger.api.v2.state_service.ParticipantPermission as ApiParticipantPermission
@@ -24,6 +25,7 @@ import com.daml.ledger.api.v2.transaction.{
 import com.daml.ledger.api.v2.update_service.{
   GetTransactionResponse,
   GetTransactionTreeResponse,
+  GetUpdateResponse,
   GetUpdateTreesResponse,
   GetUpdatesResponse,
 }
@@ -139,7 +141,7 @@ private[events] object TransactionLogUpdatesConversions {
         val internalTransactionFormat = internalUpdateFormat.includeTransactions
           .getOrElse(
             throw new IllegalStateException(
-              "Transaction cannot be converted as there is no transaction specified in update format"
+              "Transaction cannot be converted as there is no transaction format specified in update format"
             )
           )
         toTransaction(
@@ -180,6 +182,62 @@ private[events] object TransactionLogUpdatesConversions {
 
       case illegal => throw new IllegalStateException(s"$illegal is not expected here")
     }
+
+    def toGetUpdateResponse(
+        transactionLogUpdate: TransactionLogUpdate,
+        internalUpdateFormat: InternalUpdateFormat,
+        lfValueTranslation: LfValueTranslation,
+    )(implicit
+        loggingContext: LoggingContextWithTrace,
+        executionContext: ExecutionContext,
+    ): Future[Option[GetUpdateResponse]] =
+      filter(internalUpdateFormat)(transactionLogUpdate)
+        .collect {
+          case transactionAccepted: TransactionLogUpdate.TransactionAccepted =>
+            val internalTransactionFormat = internalUpdateFormat.includeTransactions
+              .getOrElse(
+                throw new IllegalStateException(
+                  "Transaction cannot be converted as there is no transaction format specified in update format"
+                )
+              )
+            toTransaction(
+              transactionAccepted,
+              internalTransactionFormat,
+              lfValueTranslation,
+              transactionAccepted.traceContext,
+            )
+              .map(transaction =>
+                GetUpdateResponse(GetUpdateResponse.Update.Transaction(transaction))
+                  .withPrecomputedSerializedSize()
+              )
+
+          case reassignmentAccepted: TransactionLogUpdate.ReassignmentAccepted =>
+            val reassignmentInternalEventFormat = internalUpdateFormat.includeReassignments
+              .getOrElse(
+                throw new IllegalStateException(
+                  "Reassignment cannot be converted as there is no reassignment specified in update format"
+                )
+              )
+            toReassignment(
+              reassignmentAccepted,
+              reassignmentInternalEventFormat.templatePartiesFilter.allFilterParties,
+              reassignmentInternalEventFormat.eventProjectionProperties,
+              lfValueTranslation,
+              reassignmentAccepted.traceContext,
+            )
+              .map(reassignment =>
+                GetUpdateResponse(GetUpdateResponse.Update.Reassignment(reassignment))
+                  .withPrecomputedSerializedSize()
+              )
+
+          case topologyTransaction: TransactionLogUpdate.TopologyTransactionEffective =>
+            toTopologyTransaction(topologyTransaction).map(transaction =>
+              GetUpdateResponse(GetUpdateResponse.Update.TopologyTransaction(transaction))
+                .withPrecomputedSerializedSize()
+            )
+        }
+        .map(_.map(Some(_)))
+        .getOrElse(Future.successful(None))
 
     def toGetFlatTransactionResponse(
         transactionLogUpdate: TransactionLogUpdate,
@@ -307,7 +365,7 @@ private[events] object TransactionLogUpdatesConversions {
             requestingParties,
             exercisedEvent,
             internalTransactionFormat.transactionShape,
-            internalTransactionFormat.internalEventFormat.eventProjectionProperties.verbose,
+            internalTransactionFormat.internalEventFormat.eventProjectionProperties,
             lfValueTranslation,
           )
       }
@@ -317,7 +375,7 @@ private[events] object TransactionLogUpdatesConversions {
         requestingParties: Option[Set[Party]],
         exercisedEvent: ExercisedEvent,
         transactionShape: TransactionShape,
-        verbose: Boolean,
+        eventProjectionProperties: EventProjectionProperties,
         lfValueTranslation: LfValueTranslation,
     )(implicit
         loggingContext: LoggingContextWithTrace,
@@ -332,6 +390,12 @@ private[events] object TransactionLogUpdatesConversions {
           )
 
         case AcsDelta =>
+          val witnessParties = requestingParties match {
+            case Some(parties) =>
+              parties.iterator.filter(exercisedEvent.flatEventWitnesses).toSeq
+            // party-wildcard
+            case None => exercisedEvent.flatEventWitnesses.toSeq
+          }
           Future.successful(
             apiEvent.Event(
               apiEvent.Event.Event.Archived(
@@ -341,12 +405,12 @@ private[events] object TransactionLogUpdatesConversions {
                   contractId = exercisedEvent.contractId.coid,
                   templateId = Some(LfEngineToApi.toApiIdentifier(exercisedEvent.templateId)),
                   packageName = exercisedEvent.packageName,
-                  witnessParties = requestingParties match {
-                    case Some(parties) =>
-                      parties.iterator.filter(exercisedEvent.flatEventWitnesses).toSeq
-                    // party-wildcard
-                    case None => exercisedEvent.flatEventWitnesses.toSeq
-                  },
+                  witnessParties = witnessParties,
+                  implementedInterfaces = lfValueTranslation.implementedInterfaces(
+                    eventProjectionProperties,
+                    witnessParties.toSet,
+                    exercisedEvent.templateId,
+                  ),
                 )
               )
             )
@@ -364,7 +428,7 @@ private[events] object TransactionLogUpdatesConversions {
 
           val eventualChoiceArgument = lfValueTranslation.toApiValue(
             exercisedEvent.exerciseArgument,
-            verbose,
+            eventProjectionProperties.verbose,
             "exercise argument",
             choiceArgumentEnricher,
           )
@@ -382,7 +446,7 @@ private[events] object TransactionLogUpdatesConversions {
               lfValueTranslation
                 .toApiValue(
                   value = exerciseResult,
-                  verbose = verbose,
+                  verbose = eventProjectionProperties.verbose,
                   attribute = "exercise result",
                   enrich = choiceResultEnricher,
                 )
@@ -393,6 +457,11 @@ private[events] object TransactionLogUpdatesConversions {
           for {
             choiceArgument <- eventualChoiceArgument
             maybeExerciseResult <- eventualExerciseResult
+            witnessParties = requestingParties
+              .fold(exercisedEvent.treeEventWitnesses)(
+                _.filter(exercisedEvent.treeEventWitnesses)
+              )
+              .toSeq
           } yield apiEvent.Event(
             apiEvent.Event.Event.Exercised(
               apiEvent.ExercisedEvent(
@@ -406,13 +475,17 @@ private[events] object TransactionLogUpdatesConversions {
                 choiceArgument = Some(choiceArgument),
                 actingParties = exercisedEvent.actingParties.toSeq,
                 consuming = exercisedEvent.consuming,
-                witnessParties = requestingParties
-                  .fold(exercisedEvent.treeEventWitnesses)(
-                    _.filter(exercisedEvent.treeEventWitnesses)
-                  )
-                  .toSeq,
+                witnessParties = witnessParties,
                 lastDescendantNodeId = exercisedEvent.lastDescendantNodeId,
                 exerciseResult = maybeExerciseResult,
+                implementedInterfaces =
+                  if (exercisedEvent.consuming)
+                    lfValueTranslation.implementedInterfaces(
+                      eventProjectionProperties,
+                      witnessParties.toSet,
+                      exercisedEvent.templateId,
+                    )
+                  else Nil,
               )
             )
           )
@@ -436,12 +509,7 @@ private[events] object TransactionLogUpdatesConversions {
         Option.when(
           requestingParties.fold(true)(u.stakeholders.exists(_))
         )(u)
-      case u: TransactionLogUpdate.TopologyTransactionEffective =>
-        val filteredEvents =
-          u.events.filter(event => matchPartyInSet(event.party)(requestingParties))
-        Option.when(filteredEvents.nonEmpty)(
-          u.copy(events = filteredEvents)(u.traceContext)
-        )
+      case _: TransactionLogUpdate.TopologyTransactionEffective => None
     }
 
     def toGetTransactionResponse(
@@ -500,12 +568,6 @@ private[events] object TransactionLogUpdatesConversions {
             GetUpdateTreesResponse(GetUpdateTreesResponse.Update.Reassignment(reassignment))
               .withPrecomputedSerializedSize()
           )
-
-      case topologyTransaction: TransactionLogUpdate.TopologyTransactionEffective =>
-        toTopologyTransaction(topologyTransaction).map(transaction =>
-          GetUpdateTreesResponse(GetUpdateTreesResponse.Update.TopologyTransaction(transaction))
-            .withPrecomputedSerializedSize()
-        )
 
       case illegal => throw new IllegalStateException(s"$illegal is not expected here")
     }
@@ -569,7 +631,7 @@ private[events] object TransactionLogUpdatesConversions {
         case exercisedEvent: TransactionLogUpdate.ExercisedEvent =>
           exercisedToTransactionTreeEvent(
             requestingParties,
-            eventProjectionProperties.verbose,
+            eventProjectionProperties,
             lfValueTranslation,
             exercisedEvent,
           )
@@ -577,7 +639,7 @@ private[events] object TransactionLogUpdatesConversions {
 
     private def exercisedToTransactionTreeEvent(
         requestingParties: Option[Set[Party]],
-        verbose: Boolean,
+        eventProjectionProperties: EventProjectionProperties,
         lfValueTranslation: LfValueTranslation,
         exercisedEvent: ExercisedEvent,
     )(implicit
@@ -595,7 +657,7 @@ private[events] object TransactionLogUpdatesConversions {
 
       val eventualChoiceArgument = lfValueTranslation.toApiValue(
         exercisedEvent.exerciseArgument,
-        verbose,
+        eventProjectionProperties.verbose,
         "exercise argument",
         choiceArgumentEnricher,
       )
@@ -613,7 +675,7 @@ private[events] object TransactionLogUpdatesConversions {
           lfValueTranslation
             .toApiValue(
               value = exerciseResult,
-              verbose = verbose,
+              verbose = eventProjectionProperties.verbose,
               attribute = "exercise result",
               enrich = choiceResultEnricher,
             )
@@ -624,6 +686,11 @@ private[events] object TransactionLogUpdatesConversions {
       for {
         choiceArgument <- eventualChoiceArgument
         maybeExerciseResult <- eventualExerciseResult
+        witnessParties = requestingParties
+          .fold(exercisedEvent.treeEventWitnesses)(
+            _.filter(exercisedEvent.treeEventWitnesses)
+          )
+          .toSeq
       } yield TreeEvent(
         TreeEvent.Kind.Exercised(
           apiEvent.ExercisedEvent(
@@ -637,13 +704,17 @@ private[events] object TransactionLogUpdatesConversions {
             choiceArgument = Some(choiceArgument),
             actingParties = exercisedEvent.actingParties.toSeq,
             consuming = exercisedEvent.consuming,
-            witnessParties = requestingParties
-              .fold(exercisedEvent.treeEventWitnesses)(
-                _.filter(exercisedEvent.treeEventWitnesses)
-              )
-              .toSeq,
+            witnessParties = witnessParties,
             lastDescendantNodeId = exercisedEvent.lastDescendantNodeId,
             exerciseResult = maybeExerciseResult,
+            implementedInterfaces =
+              if (exercisedEvent.consuming)
+                lfValueTranslation.implementedInterfaces(
+                  eventProjectionProperties,
+                  witnessParties.toSet,
+                  exercisedEvent.templateId,
+                )
+              else Nil,
           )
         )
       )
@@ -678,7 +749,6 @@ private[events] object TransactionLogUpdatesConversions {
             coid = createdEvent.contractId,
             templateId = createdEvent.templateId,
             packageName = createdEvent.packageName,
-            packageVersion = createdEvent.packageVersion,
             arg = createdEvent.createArgument.unversioned,
             signatories = createdEvent.createSignatories,
             stakeholders = createdEvent.createSignatories ++ createdEvent.createObservers,
@@ -762,14 +832,16 @@ private[events] object TransactionLogUpdatesConversions {
           createdEvent = createdEvent,
           createdWitnesses = _.flatEventWitnesses,
         ).map(createdEvent =>
-          ApiReassignment.Event.AssignedEvent(
-            ApiAssignedEvent(
-              source = info.sourceSynchronizer.unwrap.toProtoPrimitive,
-              target = info.targetSynchronizer.unwrap.toProtoPrimitive,
-              unassignId = info.unassignId.toMicros.toString,
-              submitter = info.submitter.getOrElse(""),
-              reassignmentCounter = info.reassignmentCounter,
-              createdEvent = Some(createdEvent),
+          ApiReassignmentEvent(
+            ApiReassignmentEvent.Event.Assigned(
+              ApiAssignedEvent(
+                source = info.sourceSynchronizer.unwrap.toProtoPrimitive,
+                target = info.targetSynchronizer.unwrap.toProtoPrimitive,
+                unassignId = info.unassignId.toMicros.toString,
+                submitter = info.submitter.getOrElse(""),
+                reassignmentCounter = info.reassignmentCounter,
+                createdEvent = Some(createdEvent),
+              )
             )
           )
         )
@@ -777,19 +849,23 @@ private[events] object TransactionLogUpdatesConversions {
       case TransactionLogUpdate.ReassignmentAccepted.Unassigned(unassign) =>
         val stakeholders = unassign.stakeholders
         Future.successful(
-          ApiReassignment.Event.UnassignedEvent(
-            ApiUnassignedEvent(
-              source = info.sourceSynchronizer.unwrap.toProtoPrimitive,
-              target = info.targetSynchronizer.unwrap.toProtoPrimitive,
-              unassignId = info.unassignId.toMicros.toString,
-              submitter = info.submitter.getOrElse(""),
-              reassignmentCounter = info.reassignmentCounter,
-              contractId = unassign.contractId.coid,
-              templateId = Some(LfEngineToApi.toApiIdentifier(unassign.templateId)),
-              packageName = unassign.packageName,
-              assignmentExclusivity =
-                unassign.assignmentExclusivity.map(TimestampConversion.fromLf),
-              witnessParties = requestingParties.fold(stakeholders)(stakeholders.filter),
+          ApiReassignmentEvent(
+            ApiReassignmentEvent.Event.Unassigned(
+              ApiUnassignedEvent(
+                offset = reassignmentAccepted.offset.unwrap,
+                source = info.sourceSynchronizer.unwrap.toProtoPrimitive,
+                target = info.targetSynchronizer.unwrap.toProtoPrimitive,
+                unassignId = info.unassignId.toMicros.toString,
+                submitter = info.submitter.getOrElse(""),
+                reassignmentCounter = info.reassignmentCounter,
+                contractId = unassign.contractId.coid,
+                templateId = Some(LfEngineToApi.toApiIdentifier(unassign.templateId)),
+                packageName = unassign.packageName,
+                assignmentExclusivity =
+                  unassign.assignmentExclusivity.map(TimestampConversion.fromLf),
+                witnessParties = requestingParties.fold(stakeholders)(stakeholders.filter),
+                nodeId = 0,
+              )
             )
           )
         )
@@ -803,7 +879,7 @@ private[events] object TransactionLogUpdatesConversions {
           .getOrElse(""),
         workflowId = reassignmentAccepted.workflowId,
         offset = reassignmentAccepted.offset.unwrap,
-        event = event,
+        events = Seq(event),
         traceContext = SerializableTraceContext(traceContext).toDamlProtoOpt,
         recordTime = Some(TimestampConversion.fromLf(reassignmentAccepted.recordTime)),
       )

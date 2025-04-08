@@ -3,7 +3,7 @@
 
 package com.digitalasset.canton.participant.synchronizer
 
-import com.daml.error.*
+import com.digitalasset.base.error.{ErrorCategory, ErrorCode, ErrorGroup, Explanation, Resolution}
 import com.digitalasset.canton.SynchronizerAlias
 import com.digitalasset.canton.common.sequencer.grpc.SequencerInfoLoader.SequencerInfoLoaderError
 import com.digitalasset.canton.error.*
@@ -34,7 +34,10 @@ trait SynchronizerRegistry extends AutoCloseable {
 
 }
 
-sealed trait SynchronizerRegistryError extends Product with Serializable with CantonError
+sealed trait SynchronizerRegistryError
+    extends Product
+    with Serializable
+    with ContextualizedCantonError
 
 object SynchronizerRegistryError extends SynchronizerRegistryErrorGroup {
 

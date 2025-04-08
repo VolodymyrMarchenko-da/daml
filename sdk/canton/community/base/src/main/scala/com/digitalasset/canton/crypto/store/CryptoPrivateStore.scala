@@ -4,11 +4,11 @@
 package com.digitalasset.canton.crypto.store
 
 import cats.data.EitherT
-import com.daml.error.{ErrorCategory, ErrorCode, Explanation, Resolution}
 import com.daml.nonempty.NonEmpty
+import com.digitalasset.base.error.{ErrorCategory, ErrorCode, Explanation, Resolution}
 import com.digitalasset.canton.config.CantonRequireTypes.String300
 import com.digitalasset.canton.crypto.*
-import com.digitalasset.canton.error.{BaseCantonError, CantonErrorGroups}
+import com.digitalasset.canton.error.{CantonBaseError, CantonErrorGroups}
 import com.digitalasset.canton.lifecycle.FutureUnlessShutdown
 import com.digitalasset.canton.logging.pretty.{Pretty, PrettyPrinting}
 import com.digitalasset.canton.tracing.TraceContext
@@ -64,7 +64,7 @@ trait CryptoPrivateStore extends AutoCloseable {
     * @return
     */
   def filterSigningKeys(
-      signingKeyIds: Seq[Fingerprint],
+      signingKeyIds: NonEmpty[Seq[Fingerprint]],
       filterUsage: NonEmpty[Set[SigningKeyUsage]],
   )(implicit
       traceContext: TraceContext
@@ -108,10 +108,10 @@ object CryptoPrivateStoreError extends CantonErrorGroups.CommandErrorGroup {
         ErrorCategory.InvalidGivenCurrentSystemStateOther,
       ) {
     final case class Wrap(reason: CryptoPrivateStoreError)
-        extends BaseCantonError.Impl(cause = "An error occurred with the private crypto store")
+        extends CantonBaseError.Impl(cause = "An error occurred with the private crypto store")
 
     final case class WrapStr(reason: String)
-        extends BaseCantonError.Impl(cause = "An error occurred with the private crypto store")
+        extends CantonBaseError.Impl(cause = "An error occurred with the private crypto store")
   }
 
   final case class FailedToGetWrapperKeyId(reason: String) extends CryptoPrivateStoreError {

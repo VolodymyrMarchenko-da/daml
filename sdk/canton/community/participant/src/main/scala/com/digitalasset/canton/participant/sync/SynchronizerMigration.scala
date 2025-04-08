@@ -8,13 +8,13 @@ import cats.syntax.bifunctor.*
 import cats.syntax.foldable.*
 import cats.syntax.functor.*
 import cats.syntax.traverse.*
-import com.daml.error.{ErrorCategory, ErrorCode, Explanation}
 import com.daml.nameof.NameOf.functionFullName
 import com.daml.nonempty.NonEmpty
+import com.digitalasset.base.error.{ErrorCategory, ErrorCode, Explanation}
 import com.digitalasset.canton.SynchronizerAlias
 import com.digitalasset.canton.common.sequencer.grpc.SequencerInfoLoader
 import com.digitalasset.canton.config.{BatchingConfig, ProcessingTimeout}
-import com.digitalasset.canton.error.{CantonError, ParentCantonError}
+import com.digitalasset.canton.error.{CantonError, ContextualizedCantonError, ParentCantonError}
 import com.digitalasset.canton.lifecycle.{CloseContext, FlagCloseable, FutureUnlessShutdown}
 import com.digitalasset.canton.logging.{ErrorLoggingContext, NamedLoggerFactory, NamedLogging}
 import com.digitalasset.canton.participant.admin.inspection.SyncStateInspection
@@ -40,7 +40,10 @@ import com.digitalasset.canton.util.{ReassignmentTag, SameReassignmentType}
 
 import scala.concurrent.ExecutionContext
 
-sealed trait SynchronizerMigrationError extends Product with Serializable with CantonError
+sealed trait SynchronizerMigrationError
+    extends Product
+    with Serializable
+    with ContextualizedCantonError
 
 /** Migration of contracts from a source synchronizer to target synchronizer by re-associating them
   * in the participant's persistent store.
@@ -379,9 +382,9 @@ object SynchronizerMigrationError extends MigrationErrors() {
         )
         with SynchronizerMigrationError
 
-    final case class InvalidSynchronizerConfigStatus[T[X] <: ReassignmentTag[
-      X
-    ]: SameReassignmentType](
+    final case class InvalidSynchronizerConfigStatus[
+        T[X] <: ReassignmentTag[X]: SameReassignmentType
+    ](
         synchronizer: T[SynchronizerAlias],
         status: T[SynchronizerConnectionConfigStore.Status],
     )(implicit

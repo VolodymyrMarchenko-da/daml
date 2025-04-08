@@ -9,10 +9,18 @@ import cats.syntax.foldable.*
 import cats.syntax.functor.*
 import cats.syntax.parallel.*
 import cats.syntax.validated.*
-import com.daml.error.*
 import com.daml.metrics.api.MetricsContext
 import com.daml.nameof.NameOf.functionFullName
 import com.daml.nonempty.{NonEmpty, NonEmptyUtil}
+import com.digitalasset.base.error.{
+  Alarm,
+  AlarmErrorCode,
+  ErrorCategory,
+  ErrorCode,
+  ErrorGroup,
+  Explanation,
+  Resolution,
+}
 import com.digitalasset.canton.admin.participant.v30.{ReceivedCommitmentState, SentCommitmentState}
 import com.digitalasset.canton.concurrent.{FutureSupervisor, Threading}
 import com.digitalasset.canton.config.RequireTypes.{
@@ -25,7 +33,7 @@ import com.digitalasset.canton.crypto.*
 import com.digitalasset.canton.data.{CantonTimestamp, CantonTimestampSecond}
 import com.digitalasset.canton.discard.Implicits.DiscardOps
 import com.digitalasset.canton.error.CantonErrorGroups.ParticipantErrorGroup.AcsCommitmentErrorGroup
-import com.digitalasset.canton.error.{Alarm, AlarmErrorCode, CantonError}
+import com.digitalasset.canton.error.{CantonError, ContextualizedCantonError}
 import com.digitalasset.canton.health.{AtomicHealthComponent, ComponentHealthState}
 import com.digitalasset.canton.lifecycle.*
 import com.digitalasset.canton.lifecycle.UnlessShutdown.{AbortedDueToShutdown, Outcome}
@@ -43,6 +51,7 @@ import com.digitalasset.canton.participant.pruning.AcsCommitmentProcessor.Errors
 import com.digitalasset.canton.participant.pruning.AcsCommitmentProcessor.Errors.MismatchError.AcsCommitmentAlarm
 import com.digitalasset.canton.participant.pruning.AcsCommitmentProcessor.RunningCommitments
 import com.digitalasset.canton.participant.store.*
+import com.digitalasset.canton.participant.util.TimeOfChange
 import com.digitalasset.canton.protocol.ContractIdSyntax.*
 import com.digitalasset.canton.protocol.messages.AcsCommitment.{
   CommitmentType,
@@ -75,12 +84,7 @@ import com.digitalasset.canton.util.*
 import com.digitalasset.canton.util.EitherUtil.RichEither
 import com.digitalasset.canton.util.ShowUtil.*
 import com.digitalasset.canton.version.ProtocolVersion
-import com.digitalasset.canton.{
-  LfPartyId,
-  ProtoDeserializationError,
-  ReassignmentCounter,
-  RequestCounter,
-}
+import com.digitalasset.canton.{LfPartyId, ProtoDeserializationError, ReassignmentCounter}
 import com.google.common.annotations.VisibleForTesting
 
 import java.util.concurrent.atomic.AtomicReference
@@ -225,7 +229,7 @@ class AcsCommitmentProcessor private (
   private val threadCount: PositiveNumeric[Int] = {
     val count = Threading.detectNumberOfThreads(noTracingLogger)
     noTracingLogger.info(s"Will use parallelism $count when computing ACS commitments")
-    PositiveNumeric.tryCreate(count)
+    count
   }
 
   // used to generate randomized commitment sending delays
@@ -252,7 +256,7 @@ class AcsCommitmentProcessor private (
     * commitments. It's accessed only through chained futures, such that all accesses are
     * synchronized
     */
-  @volatile private[this] var endOfLastProcessedPeriod: Option[CantonTimestampSecond] =
+  @volatile private[pruning] var endOfLastProcessedPeriod: Option[CantonTimestampSecond] =
     endLastProcessedPeriod
 
   /** In contrast to `endOfLastProcessedPeriod`, during catch-up, a period is considered processed
@@ -260,7 +264,8 @@ class AcsCommitmentProcessor private (
     * `endOfLastProcessedPeriodDuringCatchUp`. Used in `processCompletedPeriod` to compute the
     * correct reconciliation interval to be processed.
     */
-  @volatile private[this] var endOfLastProcessedPeriodDuringCatchUp: Option[CantonTimestampSecond] =
+  @volatile private[pruning] var endOfLastProcessedPeriodDuringCatchUp
+      : Option[CantonTimestampSecond] =
     None
 
   /** During a coarse-grained catch-up interval, [[runningCmtSnapshotsForCatchUp]] stores in memory
@@ -443,28 +448,25 @@ class AcsCommitmentProcessor private (
 
   override def publish(
       sequencerTimestamp: CantonTimestamp,
-      requestCounterCommitSetPairO: Option[(RequestCounter, CommitSet)],
+      commitSetO: Option[CommitSet],
   )(implicit
       traceContext: TraceContext
   ): Unit = {
     val toc = RecordTime(
       sequencerTimestamp,
-      requestCounterCommitSetPairO.map(_._1.unwrap).getOrElse(RecordTime.lowestTiebreaker),
+      RecordTime.lowestTiebreaker,
     )
     publishInternal(
       toc,
-      () => computeAcsChange(requestCounterCommitSetPairO),
+      () => computeAcsChange(sequencerTimestamp, commitSetO),
     )
   }
 
-  private def computeAcsChange(requestCounterCommitSetPairO: Option[(RequestCounter, CommitSet)])(
+  private def computeAcsChange(sequencerTimestamp: CantonTimestamp, commitSetO: Option[CommitSet])(
       implicit traceContext: TraceContext
   ): FutureUnlessShutdown[AcsChange] = {
-    // If the requestCounterCommitSetPairO is not set, then by default the commit set is empty, and
-    // the request counter is the smallest possible value that does not throw an exception in
-    // ActiveContractStore.bulkContractsReassignmentCounterSnapshot, i.e., Genesis
-    val (requestCounter, commitSet) =
-      requestCounterCommitSetPairO.getOrElse((RequestCounter.Genesis, CommitSet.empty))
+    // If the commitSetO is not set, then by default the commit set is empty
+    val commitSet = commitSetO.getOrElse(CommitSet.empty)
     // Augments the commit set with the updated reassignment counters for archive events,
     // computes the acs change and publishes it
     logger.trace(
@@ -479,9 +481,9 @@ class AcsCommitmentProcessor private (
       for {
         // Retrieves the reassignment counters of the archived contracts from the latest state in the active contract store
         archivalsWithReassignmentCountersOnly <- activeContractStore
-          .bulkContractsReassignmentCounterSnapshot(
+          .contractsReassignmentCounterSnapshotBefore(
             commitSet.archivals.keySet -- transientArchivals.keySet,
-            requestCounter,
+            sequencerTimestamp,
           )
 
       } yield {
@@ -1366,7 +1368,7 @@ class AcsCommitmentProcessor private (
         completedPeriod.toInclusive.forgetRefinement,
       )
 
-      _ <- MonadUtil.parTraverseWithLimit_(threadCount.value)(computed.toList) {
+      _ <- MonadUtil.parTraverseWithLimit_(threadCount)(computed.toList) {
         case (period, counterParticipant, cmt) =>
           logger.debug(
             s"Processing own commitment $cmt for period $period and counter-participant $counterParticipant"
@@ -1811,7 +1813,7 @@ class AcsCommitmentProcessor private (
 
   private[canton] class AcsCommitmentProcessorHealth(
       override val name: String,
-      override protected val associatedOnShutdownRunner: OnShutdownRunner,
+      override protected val associatedHasRunOnClosing: HasRunOnClosing,
       override protected val logger: TracedLogger,
   ) extends AtomicHealthComponent {
     override protected def initialHealthState: ComponentHealthState = ComponentHealthState.Ok()
@@ -2368,7 +2370,7 @@ object AcsCommitmentProcessor extends HasLoggerName {
 
     if (enableAdditionalConsistencyChecks) {
       for {
-        activeContracts <- activeContractStore.snapshot(toInclusive)(
+        activeContracts <- activeContractStore.snapshot(TimeOfChange(toInclusive))(
           namedLoggingContext.traceContext
         )
         activations = activeContracts.map { case (cid, (_toc, reassignmentCounter)) =>
@@ -2473,7 +2475,7 @@ object AcsCommitmentProcessor extends HasLoggerName {
       }
     }
 
-    trait AcsCommitmentDegradation extends CantonError
+    trait AcsCommitmentDegradation extends ContextualizedCantonError
     object DegradationError extends ErrorGroup {
 
       @Explanation(

@@ -3,7 +3,7 @@
 
 package com.digitalasset.canton.ledger.error
 
-import com.daml.error.{ErrorClass, ErrorGroup}
+import com.digitalasset.base.error.{ErrorClass, ErrorGroup}
 
 object ParticipantErrorGroup extends ErrorGroup()(ErrorClass.root()) {
   abstract class CommonErrorGroup extends ErrorGroup()
@@ -20,6 +20,8 @@ object ParticipantErrorGroup extends ErrorGroup()(ErrorClass.root()) {
 
       abstract class IdentityProviderConfigServiceErrorGroup extends ErrorGroup()
     }
+
+    abstract class JsonApiErrorGroup extends ErrorGroup()
 
     abstract class CommandExecutionErrorGroup extends ErrorGroup()
 

@@ -386,7 +386,6 @@ object Hash {
       case Node.Create(
             coid,
             packageName,
-            packageVersion,
             templateId,
             arg,
             _agreementText @ _,
@@ -395,7 +394,6 @@ object Hash {
             keyOpt,
             version,
           ) =>
-        if (packageVersion.isDefined) notSupported("packageVersion in Create node") // 2.dev feature
         if (keyOpt.isDefined) notSupported("keyOpt in Create node") // 2.dev feature
         addContext("Create Node")
           .withContext("Node Version")(_.addString(TransactionVersion.toProtoValue(version)))
@@ -1025,26 +1023,14 @@ object Hash {
     handleError(assertHashContractInstance(templateId, arg, packageName, upgradeFriendly = true))
 
   def hashChangeId(
-      applicationId: Ref.ApplicationId,
+      userId: Ref.UserId,
       commandId: Ref.CommandId,
       actAs: Set[Ref.Party],
   ): Hash =
     builder(Purpose.ChangeId, noCid2String, upgradeFriendly = true)
-      .addString(applicationId)
+      .addString(userId)
       .addString(commandId)
       .addStringSet(actAs)
-      .build
-
-  def deriveSubmissionSeed(
-      nonce: Hash,
-      applicationId: Ref.LedgerString,
-      commandId: Ref.LedgerString,
-      submitter: Ref.Party,
-  ): Hash =
-    hMacBuilder(nonce)
-      .addString(applicationId)
-      .addString(commandId)
-      .addString(submitter)
       .build
 
   def deriveTransactionSeed(

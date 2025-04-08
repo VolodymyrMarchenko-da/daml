@@ -69,7 +69,7 @@ private[validation] object Typing {
 
   private def kindOfBuiltin(bType: BuiltinType): Kind = bType match {
     case BTInt64 | BTText | BTTimestamp | BTParty | BTBool | BTDate | BTUnit | BTAny | BTTypeRep |
-        BTAnyException | BTRoundingMode | BTBigNumeric =>
+        BTAnyException | BTRoundingMode | BTBigNumeric | BTFailureCategory =>
       KStar
     case BTNumeric => KArrow(KNat, KStar)
     case BTList | BTUpdate | BTScenario | BTContractId | BTOptional | BTTextMap =>
@@ -84,6 +84,7 @@ private[validation] object Typing {
     case BLTimestamp(_) => TTimestamp
     case BLDate(_) => TDate
     case BLRoundingMode(_) => TRoundingMode
+    case BLFailureCategory(_) => TFailureCategory
   }
 
   private def tBinop(typ: Type): Type = typ ->: typ ->: typ
@@ -245,6 +246,8 @@ private[validation] object Typing {
       BContractIdToText -> TForall(alpha.name -> KStar, TContractId(alpha) ->: TOptional(TText)),
       BSHA256Text -> (TText ->: TText),
       BKECCAK256Text -> (TText ->: TText),
+      BDecodeHex -> (TText ->: TText),
+      BEncodeHex -> (TText ->: TText),
       BPartyToQuotedText -> (TParty ->: TText),
       BCodePointsToText -> (TList(TInt64) ->: TText),
       BTextToParty -> (TText ->: TOptional(TParty)),
@@ -299,6 +302,11 @@ private[validation] object Typing {
       BAnyExceptionMessage -> (TAnyException ->: TText),
       // TypeRep functions
       BTypeRepTyConName -> (TTypeRep ->: TOptional(TText)),
+      // Failure Status
+      BFailWithStatus -> TForall(
+        alpha.name -> KStar,
+        TText ->: TFailureCategory ->: TText ->: TTextMap(TText) ->: alpha,
+      ),
     )
   }
 
@@ -1350,6 +1358,10 @@ private[validation] object Typing {
         typeOfFetchInterface(tpl, cid)
       case UpdateGetTime =>
         Ret(TUpdate(TTimestamp))
+      case UpdateLedgerTimeLT(time) =>
+        checkExpr(time, TTimestamp) {
+          Ret(TUpdate(TBool))
+        }
       case UpdateEmbedExpr(typ, exp) =>
         checkExpr(exp, TUpdate(typ)) {
           Ret(TUpdate(typ))

@@ -3,7 +3,6 @@
 
 package com.digitalasset.canton.platform.index
 
-import com.daml.error.ContextualizedErrorLogger
 import com.daml.ledger.resources.{Resource, ResourceContext, ResourceOwner}
 import com.daml.resources.ProgramResource.StartupException
 import com.daml.timer.RetryStrategy
@@ -13,7 +12,12 @@ import com.digitalasset.canton.ledger.error.IndexErrors.IndexDbException
 import com.digitalasset.canton.ledger.participant.state.index.IndexService
 import com.digitalasset.canton.lifecycle.FutureUnlessShutdown
 import com.digitalasset.canton.logging.LoggingContextWithTrace.implicitExtractTraceContext
-import com.digitalasset.canton.logging.{LoggingContextWithTrace, NamedLoggerFactory, NamedLogging}
+import com.digitalasset.canton.logging.{
+  ContextualizedErrorLogger,
+  LoggingContextWithTrace,
+  NamedLoggerFactory,
+  NamedLogging,
+}
 import com.digitalasset.canton.metrics.LedgerApiServerMetrics
 import com.digitalasset.canton.platform.InMemoryState
 import com.digitalasset.canton.platform.apiserver.TimedIndexService
@@ -43,7 +47,6 @@ import scala.util.control.NoStackTrace
 
 final class IndexServiceOwner(
     config: IndexServiceConfig,
-    experimentalEnableTopologyEvents: Boolean,
     dbSupport: DbSupport,
     metrics: LedgerApiServerMetrics,
     participantId: Ref.ParticipantId,
@@ -86,11 +89,10 @@ final class IndexServiceOwner(
 
       bufferedTransactionsReader = BufferedUpdateReader(
         delegate = ledgerDao.updateReader,
-        transactionsBuffer = inMemoryState.inMemoryFanoutBuffer,
+        updatesBuffer = inMemoryState.inMemoryFanoutBuffer,
         lfValueTranslation = lfValueTranslation,
         metrics = metrics,
         eventProcessingParallelism = config.bufferedEventsProcessingParallelism,
-        experimentalEnableTopologyEvents = experimentalEnableTopologyEvents,
         loggerFactory = loggerFactory,
       )(queryExecutionContext)
 
@@ -114,7 +116,6 @@ final class IndexServiceOwner(
         metrics = metrics,
         loggerFactory = loggerFactory,
         idleStreamOffsetCheckpointTimeout = config.idleStreamOffsetCheckpointTimeout,
-        experimentalEnableTopologyEvents = experimentalEnableTopologyEvents,
       )
     } yield new TimedIndexService(indexService, metrics)
   }
@@ -204,7 +205,6 @@ final class IndexServiceOwner(
       transactionTreeStreamsConfig = config.transactionTreeStreams,
       globalMaxEventIdQueries = config.globalMaxEventIdQueries,
       globalMaxEventPayloadQueries = config.globalMaxEventPayloadQueries,
-      experimentalEnableTopologyEvents = experimentalEnableTopologyEvents,
       tracer = tracer,
       loggerFactory = loggerFactory,
       incompleteOffsets = incompleteOffsets,

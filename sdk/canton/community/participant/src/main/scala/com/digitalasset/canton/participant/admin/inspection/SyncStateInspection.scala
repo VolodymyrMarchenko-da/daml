@@ -4,7 +4,7 @@
 package com.digitalasset.canton.participant.admin.inspection
 
 import cats.Eval
-import cats.data.EitherT
+import cats.data.{EitherT, OptionT}
 import cats.syntax.either.*
 import cats.syntax.traverse.*
 import com.daml.nameof.NameOf.functionFullName
@@ -14,11 +14,11 @@ import com.digitalasset.canton.config.ProcessingTimeout
 import com.digitalasset.canton.config.RequireTypes.{NonNegativeInt, NonNegativeLong}
 import com.digitalasset.canton.crypto.SyncCryptoApiParticipantProvider
 import com.digitalasset.canton.data.{CantonTimestamp, CantonTimestampSecond, Offset}
-import com.digitalasset.canton.ledger.participant.state.{RequestIndex, SynchronizerIndex}
+import com.digitalasset.canton.ledger.participant.state.SynchronizerIndex
 import com.digitalasset.canton.lifecycle.{FutureUnlessShutdown, UnlessShutdown}
 import com.digitalasset.canton.logging.{NamedLoggerFactory, NamedLogging}
 import com.digitalasset.canton.networking.grpc.CantonGrpcUtil.GrpcUSExtended
-import com.digitalasset.canton.participant.admin.data.ActiveContract
+import com.digitalasset.canton.participant.admin.data.ActiveContractOld
 import com.digitalasset.canton.participant.admin.inspection.SyncStateInspection.{
   InFlightCount,
   SyncStateInspectionError,
@@ -31,6 +31,7 @@ import com.digitalasset.canton.participant.sync.{
   ConnectedSynchronizersLookup,
   SyncPersistentStateManager,
 }
+import com.digitalasset.canton.participant.util.{TimeOfChange, TimeOfRequest}
 import com.digitalasset.canton.platform.store.backend.EventStorageBackend.SynchronizerOffset
 import com.digitalasset.canton.protocol.messages.*
 import com.digitalasset.canton.protocol.messages.CommitmentPeriodState.{
@@ -49,6 +50,7 @@ import com.digitalasset.canton.sequencing.client.channel.SequencerChannelClient
 import com.digitalasset.canton.sequencing.handlers.EnvelopeOpener
 import com.digitalasset.canton.serialization.ProtoConverter.ParsingResult
 import com.digitalasset.canton.store.SequencedEventStore.{
+  ByTimestamp,
   ByTimestampRange,
   PossiblyIgnoredSequencedEvent,
 }
@@ -140,7 +142,7 @@ final class SyncStateInspection(
       traceContext: TraceContext
   ): EitherT[FutureUnlessShutdown, SyncStateInspectionError, Map[
     LfContractId,
-    (CantonTimestamp, ReassignmentCounter),
+    (TimeOfChange, ReassignmentCounter),
   ]] =
     for {
       state <- EitherT.fromEither[FutureUnlessShutdown](
@@ -150,7 +152,7 @@ final class SyncStateInspection(
       )
 
       snapshotO <- EitherT.right(state.acsInspection.getCurrentSnapshot().map(_.map(_.snapshot)))
-    } yield snapshotO.fold(Map.empty[LfContractId, (CantonTimestamp, ReassignmentCounter)])(
+    } yield snapshotO.fold(Map.empty[LfContractId, (TimeOfChange, ReassignmentCounter)])(
       _.toMap
     )
 
@@ -284,17 +286,21 @@ final class SyncStateInspection(
                 (synchronizerId, state.staticSynchronizerParameters.protocolVersion),
               )
             val acsInspection = state.acsInspection
-
+            val timeOfSnapshotO = timestamp.map(TimeOfChange.apply)
             val ret = for {
               result <- acsInspection
                 .forEachVisibleActiveContract(
                   synchronizerId,
                   parties,
-                  timestamp,
-                  skipCleanTimestampCheck = skipCleanTimestampCheck,
+                  timeOfSnapshotO,
+                  skipCleanTocCheck = skipCleanTimestampCheck,
                 ) { case (contract, reassignmentCounter) =>
                   val activeContract =
-                    ActiveContract.create(synchronizerIdForExport, contract, reassignmentCounter)(
+                    ActiveContractOld.create(
+                      synchronizerIdForExport,
+                      contract,
+                      reassignmentCounter,
+                    )(
                       protocolVersion
                     )
 
@@ -314,7 +320,7 @@ final class SyncStateInspection(
                 }
 
               _ <- result match {
-                case Some((allStakeholders, snapshotTs)) if partiesOffboarding =>
+                case Some((allStakeholders, snapshotToc)) if partiesOffboarding =>
                   for {
                     connectedSynchronizer <- EitherT.fromOption[FutureUnlessShutdown](
                       connectedSynchronizersLookup.get(synchronizerId),
@@ -328,7 +334,7 @@ final class SyncStateInspection(
                       participantId,
                       offboardedParties = parties,
                       allStakeholders = allStakeholders,
-                      snapshotTs = snapshotTs,
+                      snapshotToc = snapshotToc,
                       topologyClient = connectedSynchronizer.topologyClient,
                     )
                   } yield ()
@@ -374,7 +380,7 @@ final class SyncStateInspection(
 
   def activeContractsStakeholdersFilter(
       synchronizerId: SynchronizerId,
-      timestamp: CantonTimestamp,
+      toc: TimeOfChange,
       parties: Set[LfPartyId],
   )(implicit
       traceContext: TraceContext
@@ -388,16 +394,16 @@ final class SyncStateInspection(
           )
       )
 
-      snapshot <- state.activeContractStore.snapshot(timestamp)
+      snapshot <- state.activeContractStore.snapshot(toc)
 
       // check that the active contract store has not been pruned up to timestamp, otherwise the snapshot is inconsistent.
       pruningStatus <- state.activeContractStore.pruningStatus
       _ <-
-        if (pruningStatus.exists(_.timestamp > timestamp)) {
+        if (pruningStatus.exists(_.timestamp > toc.timestamp)) {
           FutureUnlessShutdown.failed(
             new IllegalStateException(
               s"Active contract store for synchronizer $synchronizerId has been pruned up to ${pruningStatus
-                  .map(_.lastSuccess)}, which is after the requested timestamp $timestamp"
+                  .map(_.lastSuccess)}, which is after the requested time of change $toc"
             )
           )
         } else FutureUnlessShutdown.unit
@@ -721,11 +727,26 @@ final class SyncStateInspection(
     )
   }.asGrpcResponse
 
-  def lookupCleanRequestIndex(synchronizerAlias: SynchronizerAlias)(implicit
+  /** Returns the last clean time of request of the specified synchronizer from the indexer's point
+    * of view.
+    */
+  @VisibleForTesting
+  def lookupCleanTimeOfRequest(synchronizerAlias: SynchronizerAlias)(implicit
       traceContext: TraceContext
-  ): Either[String, FutureUnlessShutdown[Option[RequestIndex]]] =
-    lookupCleanSynchronizerIndex(synchronizerAlias)
-      .map(_.map(_.flatMap(_.requestIndex)))
+  ): Either[String, FutureUnlessShutdown[Option[TimeOfRequest]]] =
+    getPersistentStateE(synchronizerAlias)
+      .map(state =>
+        (for {
+          cleanTs <- OptionT(
+            participantNodePersistentState.value.ledgerApiStore
+              .cleanSynchronizerIndex(state.indexedSynchronizer.synchronizerId)
+              .map(_.map(_.recordTime))
+          )
+          cleanTimeOfRequest <- OptionT(
+            state.requestJournalStore.lastRequestTimeWithRequestTimestampBeforeOrAt(cleanTs)
+          )
+        } yield cleanTimeOfRequest).value
+      )
 
   def lookupCleanSynchronizerIndex(synchronizerAlias: SynchronizerAlias)(implicit
       traceContext: TraceContext
@@ -734,6 +755,30 @@ final class SyncStateInspection(
       .map(state =>
         participantNodePersistentState.value.ledgerApiStore
           .cleanSynchronizerIndex(state.indexedSynchronizer.synchronizerId)
+      )
+
+  def lookupCleanSequencerCounter(synchronizerAlias: SynchronizerAlias)(implicit
+      traceContext: TraceContext
+  ): Either[String, FutureUnlessShutdown[Option[SequencerCounter]]] =
+    getPersistentStateE(synchronizerAlias)
+      .map(state =>
+        participantNodePersistentState.value.ledgerApiStore
+          .cleanSynchronizerIndex(state.indexedSynchronizer.synchronizerId)
+          .flatMap(
+            _.flatMap(_.sequencerIndex)
+              .traverse(sequencerIndex =>
+                state.sequencedEventStore
+                  .find(ByTimestamp(sequencerIndex.sequencerTimestamp))
+                  .value
+                  .map(
+                    _.getOrElse(
+                      ErrorUtil.invalidState(
+                        s"SequencerIndex with timestamp ${sequencerIndex.sequencerTimestamp} is not found in sequenced event store"
+                      )
+                    ).counter
+                  )
+              )
+          )
       )
 
   def requestStateInJournal(rc: RequestCounter, synchronizerAlias: SynchronizerAlias)(implicit
@@ -1018,14 +1063,27 @@ final class SyncStateInspection(
         timeouts.inspection.await(functionFullName)(
           participantNodePersistentState.value.ledgerApiStore
             .cleanSynchronizerIndex(synchronizerState.indexedSynchronizer.synchronizerId)
-            .flatMap { synchronizerIndexO =>
-              val nextSequencerCounter = synchronizerIndexO
-                .flatMap(_.sequencerIndex)
-                .map(
-                  _.counter.increment
-                    .getOrElse(
-                      throw new IllegalStateException("sequencer counter cannot be increased")
+            .flatMap(
+              _.flatMap(_.sequencerIndex)
+                .traverse(sequencerIndex =>
+                  synchronizerState.sequencedEventStore
+                    .find(ByTimestamp(sequencerIndex.sequencerTimestamp))
+                    .value
+                    .map(
+                      _.getOrElse(
+                        ErrorUtil.invalidState(
+                          s"SequencerIndex with timestamp ${sequencerIndex.sequencerTimestamp} is not found in sequenced event store"
+                        )
+                      ).counter
                     )
+                )
+            )
+            .flatMap { sequencerCounterO =>
+              val nextSequencerCounter = sequencerCounterO
+                .map(
+                  _.increment.getOrElse(
+                    throw new IllegalStateException("sequencer counter cannot be increased")
+                  )
                 )
                 .getOrElse(SequencerCounter.Genesis)
               logger.info(

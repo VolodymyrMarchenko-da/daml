@@ -5,7 +5,8 @@ package com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.mo
 
 import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.modules.consensus.iss.data.EpochStore
 import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.modules.consensus.iss.data.Genesis.GenesisEpoch
-import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.framework.data.NumberIdentifiers.EpochNumber
+import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.framework.data.BftOrderingIdentifiers.EpochLength
+import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.framework.data.ordering.iss.EpochInfo
 import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.framework.data.snapshot.SequencerSnapshotAdditionalInfo
 import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.framework.data.topology.Membership
 
@@ -13,32 +14,47 @@ import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.framewor
 object BootstrapDetector {
 
   /** Onboarding is currently assumed if a sequencer snapshot with additional info is provided, the
-    * node hasn't completed any epoch, and the node is not the only peer in the ordering topology.
+    * node hasn't completed any epoch, and the node is not the only node in the ordering topology.
     * The latter is queried based on a topology activation timestamp from the sequencer snapshot
     * additional info when a snapshot is provided.
     *
     * A sequencer snapshot can effectively be used for initialization only once. Subsequent
-    * initialization calls are ignored (see the implementation in [[SequencerNode]]). Therefore, if
-    * a sequencer becomes initialized before state transfer for onboarding is finished, it will most
-    * likely become stuck. In such a case, at the very least, clearing the database would be
-    * required before starting the node again. However, synchronizer recovery is currently
-    * unsupported in case of onboarding failures or crashes.
+    * initialization calls are ignored (see the implementation in
+    * [[com.digitalasset.canton.synchronizer.sequencer.SequencerNode]]). Therefore, if a sequencer
+    * becomes initialized before state transfer for onboarding is finished, it will most likely
+    * become stuck. In such a case, at the very least, clearing the database would be required
+    * before starting the node again. However, synchronizer recovery is currently unsupported in
+    * case of onboarding failures or crashes.
     */
   def detect(
+      epochLength: EpochLength,
       snapshotAdditionalInfo: Option[SequencerSnapshotAdditionalInfo],
       membership: Membership,
       latestCompletedEpoch: EpochStore.Epoch,
   )(abort: String => Nothing): BootstrapKind =
     snapshotAdditionalInfo match {
       case Some(additionalInfo)
-          if latestCompletedEpoch == GenesisEpoch && membership.otherPeers.sizeIs > 0 =>
-        val startEpoch = additionalInfo.peerActiveAt
-          .get(membership.myId)
-          .flatMap(_.epochNumber)
+          if latestCompletedEpoch == GenesisEpoch && membership.otherNodes.sizeIs > 0 =>
+        val activeAt = additionalInfo.nodeActiveAt
           .getOrElse(
-            abort("No starting epoch found for new node onboarding")
+            membership.myId,
+            abort(s"New node ${membership.myId} not found in sequencer snapshot additional info"),
           )
-        BootstrapKind.Onboarding(startEpoch)
+
+        val startEpochInfo = EpochInfo(
+          activeAt.epochNumber.getOrElse(
+            abort("No starting epoch number found for new node onboarding")
+          ),
+          activeAt.firstBlockNumberInEpoch.getOrElse(
+            abort("No starting epoch's first block number found for new node onboarding")
+          ),
+          epochLength,
+          activeAt.epochTopologyQueryTimestamp.getOrElse(
+            abort("No starting epoch's topology query timestamp found for new node onboarding")
+          ),
+        )
+
+        BootstrapKind.Onboarding(startEpochInfo)
 
       case _ =>
         BootstrapKind.RegularStartup
@@ -47,6 +63,6 @@ object BootstrapDetector {
   sealed trait BootstrapKind extends Product with Serializable
   object BootstrapKind {
     case object RegularStartup extends BootstrapKind
-    final case class Onboarding(startEpoch: EpochNumber) extends BootstrapKind
+    final case class Onboarding(startEpochInfo: EpochInfo) extends BootstrapKind
   }
 }

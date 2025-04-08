@@ -44,14 +44,11 @@ import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.admin.Se
   OrderingTopology,
   PeerNetworkStatus,
 }
-import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.driver.BftBlockOrderer.{
-  EndpointId,
-  P2PEndpointConfig,
-}
+import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.driver.BftBlockOrdererConfig
 import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.networking.GrpcNetworking.P2PEndpoint
 import com.digitalasset.canton.synchronizer.sequencer.config.{
   RemoteSequencerConfig,
-  SequencerNodeConfigCommon,
+  SequencerNodeConfig,
 }
 import com.digitalasset.canton.synchronizer.sequencer.{
   SequencerClients,
@@ -1193,7 +1190,7 @@ abstract class SequencerReference(
 
     @Help.Summary("Add a new peer endpoint")
     def add_peer_endpoint(
-        endpointConfig: P2PEndpointConfig
+        endpointConfig: BftBlockOrdererConfig.P2PEndpointConfig
     ): Unit =
       consoleEnvironment.run {
         runner.adminCommand(
@@ -1204,7 +1201,7 @@ abstract class SequencerReference(
       }
 
     @Help.Summary("Remove a peer endpoint")
-    def remove_peer_endpoint(peerEndpointId: EndpointId): Unit =
+    def remove_peer_endpoint(peerEndpointId: BftBlockOrdererConfig.EndpointId): Unit =
       consoleEnvironment.run {
         runner.adminCommand(
           SequencerBftAdminCommands.RemovePeerEndpoint(
@@ -1214,7 +1211,9 @@ abstract class SequencerReference(
       }
 
     @Help.Summary("Get peer network status")
-    def get_peer_network_status(endpoints: Option[Iterable[EndpointId]]): PeerNetworkStatus =
+    def get_peer_network_status(
+        endpoints: Option[Iterable[BftBlockOrdererConfig.EndpointId]]
+    ): PeerNetworkStatus =
       consoleEnvironment.run {
         runner.adminCommand(
           SequencerBftAdminCommands.GetPeerNetworkStatus(endpoints.map(_.map(toInternal)))
@@ -1227,7 +1226,7 @@ abstract class SequencerReference(
         runner.adminCommand(SequencerBftAdminCommands.GetOrderingTopology())
       }
 
-    private def toInternal(endpoint: EndpointId): P2PEndpoint.Id =
+    private def toInternal(endpoint: BftBlockOrdererConfig.EndpointId): P2PEndpoint.Id =
       P2PEndpoint.Id(endpoint.address, endpoint.port, endpoint.tls)
   }
 }
@@ -1245,13 +1244,13 @@ class LocalSequencerReference(
   override def adminToken: Option[String] = runningNode.flatMap(_.getAdminToken)
 
   @Help.Summary("Returns the sequencer configuration")
-  override def config: SequencerNodeConfigCommon =
+  override def config: SequencerNodeConfig =
     consoleEnvironment.environment.config.sequencersByString(name)
 
   override lazy val sequencerConnection: GrpcSequencerConnection =
     config.publicApi.clientConfig.asSequencerConnection()
 
-  private[console] val nodes: SequencerNodes[?] =
+  private[console] val nodes: SequencerNodes =
     consoleEnvironment.environment.sequencers
 
   override protected[console] def runningNode: Option[SequencerNodeBootstrap] =
@@ -1362,6 +1361,9 @@ abstract class MediatorReference(val consoleEnvironment: ConsoleEnvironment, nam
   @Help.Summary("Pruning functionality for the mediator")
   @Help.Group("Testing")
   def pruning: MediatorPruningAdministrationGroup = pruning_
+
+  private lazy val scan_ = new MediatorScanGroup(runner, consoleEnvironment, name, loggerFactory)
+  def scan: MediatorScanGroup = scan_
 }
 
 class LocalMediatorReference(consoleEnvironment: ConsoleEnvironment, val name: String)

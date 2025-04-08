@@ -43,14 +43,7 @@ import com.digitalasset.canton.platform.{DispatcherState, InMemoryState}
 import com.digitalasset.canton.topology.SynchronizerId
 import com.digitalasset.canton.tracing.TraceContext
 import com.digitalasset.canton.util.ReassignmentTag
-import com.digitalasset.canton.{
-  BaseTest,
-  HasExecutorServiceGeneric,
-  RequestCounter,
-  SequencerCounter,
-  TestEssentials,
-  data,
-}
+import com.digitalasset.canton.{BaseTest, HasExecutorServiceGeneric, TestEssentials, data}
 import com.digitalasset.daml.lf.crypto
 import com.digitalasset.daml.lf.data.Ref.Identifier
 import com.digitalasset.daml.lf.data.Time.Timestamp
@@ -571,9 +564,9 @@ object InMemoryStateUpdaterSpec {
     val tx_rejected_updateId = "tRejected"
     val tx_rejected_submitters: Set[String] = Set("p3", "p4")
 
-    val tx_accepted_completion: Completion = Completion(
+    val tx_accepted_completion: Completion = Completion.defaultInstance.copy(
       commandId = tx_accepted_commandId,
-      applicationId = "appId",
+      userId = "userId",
       updateId = tx_accepted_updateId,
       submissionId = "submissionId",
       actAs = tx_accepted_submitters.toSeq,
@@ -761,9 +754,7 @@ object InMemoryStateUpdaterSpec {
     offset ->
       Update.SequencerIndexMoved(
         synchronizerId = SynchronizerId.tryFromString("x::synchronizer"),
-        sequencerCounter = SequencerCounter(15L),
         recordTime = CantonTimestamp(recordTime),
-        requestCounterO = None,
       )
 
   private val metadataChangedUpdate = rawMetadataChangedUpdate(offset(12L), Timestamp.Epoch)
@@ -775,8 +766,6 @@ object InMemoryStateUpdaterSpec {
       updateId = txId2,
       contractMetadata = Map.empty,
       synchronizerId = SynchronizerId.tryFromString("da::default"),
-      requestCounter = RequestCounter(1),
-      sequencerCounter = SequencerCounter(1),
       recordTime = CantonTimestamp.MinValue,
     )
 
@@ -929,8 +918,6 @@ object InMemoryStateUpdaterSpec {
       updateId = txId1,
       contractMetadata = Map.empty,
       synchronizerId = synchronizerId,
-      requestCounter = RequestCounter(1),
-      sequencerCounter = SequencerCounter(1),
       recordTime = CantonTimestamp(Timestamp(t)),
     )
 
@@ -956,8 +943,6 @@ object InMemoryStateUpdaterSpec {
         createNode = someCreateNode,
         contractMetadata = someContractMetadataBytes,
       ),
-      requestCounter = RequestCounter(1),
-      sequencerCounter = SequencerCounter(1),
       recordTime = CantonTimestamp(Timestamp(t)),
     )
 
@@ -985,8 +970,6 @@ object InMemoryStateUpdaterSpec {
         stakeholders = List(party2),
         assignmentExclusivity = Some(Timestamp.assertFromLong(123456L)),
       ),
-      requestCounter = RequestCounter(1),
-      sequencerCounter = SequencerCounter(1),
       recordTime = CantonTimestamp(Timestamp(t)),
     )
 
@@ -994,15 +977,13 @@ object InMemoryStateUpdaterSpec {
     Update.SequencedCommandRejected(
       completionInfo = CompletionInfo(
         actAs = List.empty,
-        applicationId = Ref.ApplicationId.assertFromString("some-app-id"),
+        userId = Ref.UserId.assertFromString("some-app-id"),
         commandId = Ref.CommandId.assertFromString("cmdId"),
         optDeduplicationPeriod = None,
         submissionId = None,
       ),
       reasonTemplate = FinalReason(new Status()),
       synchronizerId = synchronizerId,
-      requestCounter = RequestCounter(1),
-      sequencerCounter = SequencerCounter(1),
       recordTime = CantonTimestamp.assertFromLong(t),
     )
 
@@ -1012,9 +993,7 @@ object InMemoryStateUpdaterSpec {
   ): Update.SequencerIndexMoved =
     Update.SequencerIndexMoved(
       synchronizerId = synchronizerId,
-      sequencerCounter = SequencerCounter(1),
       recordTime = CantonTimestamp.assertFromLong(t),
-      requestCounterO = None,
     )
 
   private def topologyTransactionEffective(

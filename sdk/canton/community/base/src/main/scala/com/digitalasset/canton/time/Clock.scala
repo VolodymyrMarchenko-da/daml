@@ -5,7 +5,7 @@ package com.digitalasset.canton.time
 
 import cats.data.EitherT
 import cats.syntax.either.*
-import com.daml.error.{ErrorCategory, ErrorCode, Explanation, Resolution}
+import com.digitalasset.base.error.{ErrorCategory, ErrorCode, Explanation, Resolution}
 import com.digitalasset.canton.concurrent.Threading
 import com.digitalasset.canton.config.{ClientConfig, ProcessingTimeout}
 import com.digitalasset.canton.data.CantonTimestamp
@@ -162,8 +162,9 @@ abstract class Clock() extends TimeProvider with AutoCloseable with NamedLogging
       timestamp: CantonTimestamp,
   ): FutureUnlessShutdown[A] = {
     val queued = Queued(action, timestamp)
-    if (!now.isBefore(timestamp)) {
-      queued.run(now)
+    val nowTime = now
+    if (!nowTime.isBefore(timestamp)) {
+      queued.run(nowTime)
     } else {
       addToQueue(queued)
     }

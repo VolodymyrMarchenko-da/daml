@@ -11,7 +11,12 @@ import com.daml.nonempty.NonEmpty
 import com.digitalasset.canton.concurrent.HasFutureSupervision
 import com.digitalasset.canton.config.RequireTypes.PositiveInt
 import com.digitalasset.canton.crypto.SigningKeyUsage.matchesRelevantUsages
-import com.digitalasset.canton.crypto.{EncryptionPublicKey, SigningKeyUsage, SigningPublicKey}
+import com.digitalasset.canton.crypto.{
+  EncryptionPublicKey,
+  PublicKey,
+  SigningKeyUsage,
+  SigningPublicKey,
+}
 import com.digitalasset.canton.data.CantonTimestamp
 import com.digitalasset.canton.discard.Implicits.DiscardOps
 import com.digitalasset.canton.lifecycle.FutureUnlessShutdown
@@ -105,7 +110,7 @@ trait TopologyClientApi[+T] { this: HasFutureSupervision =>
   /** The approximate timestamp
     *
     * This is either the last observed sequencer timestamp OR the effective timestamp after we
-    * observed the time difference of (effective - sequencer = epsilon) to elapse
+    * observed the time difference of (effective - sequencer = epsilon)
     */
   def approximateTimestamp: CantonTimestamp
 
@@ -172,13 +177,19 @@ trait TopologyClientApi[+T] { this: HasFutureSupervision =>
       timestamp: CantonTimestamp
   )(implicit traceContext: TraceContext): Option[FutureUnlessShutdown[Unit]]
 
-  /** Finds the topology transaction with maximum effective time whose effects would be visible, at
-    * earliest i.e. if delay is 0, in a topology snapshot at `effectiveTime`, and yields the
-    * sequenced and actual effective time of that topology transaction, if necessary after waiting
-    * to observe a timestamp at or after sequencing time `effectiveTime.immediatePredecessor` that
-    * the topology processor has fully processed.
+  /** Returns an optional future which will complete when the sequenced timestamp has been observed
+    *
+    * If the timestamp is already observed, returns None.
     */
-  def awaitMaxTimestamp(sequencedTime: CantonTimestamp)(implicit
+  def awaitSequencedTimestamp(timestampInclusive: SequencedTime)(implicit
+      traceContext: TraceContext
+  ): Option[FutureUnlessShutdown[Unit]]
+
+  /** Finds the transaction with maximum effective time that has been sequenced before or at
+    * `sequencedTime` and yields the sequenced / effective time of that transaction. Potentially
+    * waits for `sequencedTime` to be observed.
+    */
+  def awaitMaxTimestamp(sequencedTime: SequencedTime)(implicit
       traceContext: TraceContext
   ): FutureUnlessShutdown[Option[(SequencedTime, EffectiveTime)]]
 }
@@ -502,6 +513,16 @@ trait SequencerSynchronizerStateClient {
   def sequencerGroup()(implicit
       traceContext: TraceContext
   ): FutureUnlessShutdown[Option[SequencerGroup]]
+
+  /** Returns true if <ul> <li>the sequencer is a member of the sequencer group</li> <li>the
+    * sequencer has an OwnerToKeyMapping with at least 1 signing key</li> </ul>
+    */
+  def isSequencerActive(sequencerId: SequencerId)(implicit
+      traceContext: TraceContext
+  ): FutureUnlessShutdown[Boolean] =
+    sequencerGroup().map(_.exists { group =>
+      group.active.contains(sequencerId)
+    })
 }
 
 trait VettedPackagesSnapshotClient {
@@ -733,13 +754,15 @@ private[client] trait KeyTopologySnapshotClientLoader extends KeyTopologySnapsho
   override def encryptionKey(owner: Member)(implicit
       traceContext: TraceContext
   ): FutureUnlessShutdown[Option[EncryptionPublicKey]] =
-    allKeys(owner).map(_.encryptionKeys.lastOption)
+    allKeys(owner).map(keyCollection => PublicKey.getLatestKey(keyCollection.encryptionKeys))
 
-  /** returns newest encryption public key */
+  /** returns the newest encryption public key */
   def encryptionKey(members: Seq[Member])(implicit
       traceContext: TraceContext
   ): FutureUnlessShutdown[Map[Member, EncryptionPublicKey]] =
-    encryptionKeys(members).map(_.mapFilter(_.lastOption))
+    encryptionKeys(members).map(
+      _.mapFilter(keyCollection => PublicKey.getLatestKey(keyCollection))
+    )
 
   override def encryptionKeys(owner: Member)(implicit
       traceContext: TraceContext
@@ -965,9 +988,13 @@ private[client] trait PartyTopologySnapshotLoader
 }
 
 trait VettedPackagesLoader {
-  private[client] def loadVettedPackages(
+  def loadVettedPackages(
       participant: ParticipantId
   )(implicit traceContext: TraceContext): FutureUnlessShutdown[Map[PackageId, VettedPackage]]
+
+  def loadVettedPackages(participants: Seq[ParticipantId])(implicit
+      traceContext: TraceContext
+  ): FutureUnlessShutdown[Map[ParticipantId, Map[PackageId, VettedPackage]]]
 }
 
 trait VettedPackagesSnapshotLoader extends VettedPackagesSnapshotClient with VettedPackagesLoader {

@@ -8,12 +8,11 @@ import com.daml.metrics.api.MetricsContext
 import com.digitalasset.canton.config.ProcessingTimeout
 import com.digitalasset.canton.logging.NamedLoggerFactory
 import com.digitalasset.canton.synchronizer.metrics.BftOrderingMetrics
-import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.driver.BftBlockOrderer
+import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.driver.BftBlockOrdererConfig
 import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.modules.HasDelayedInit
 import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.modules.consensus.iss.data.EpochStore
-import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.modules.consensus.iss.leaders.SimpleLeaderSelectionPolicy
 import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.core.modules.consensus.iss.retransmissions.RetransmissionsManager
-import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.framework.data.NumberIdentifiers.{
+import com.digitalasset.canton.synchronizer.sequencer.block.bftordering.framework.data.BftOrderingIdentifiers.{
   EpochLength,
   EpochNumber,
 }
@@ -29,6 +28,8 @@ import com.digitalasset.canton.time.Clock
 import com.digitalasset.canton.tracing.TraceContext
 import com.google.common.annotations.VisibleForTesting
 
+import scala.util.Random
+
 import EpochState.Epoch
 import IssConsensusModule.DefaultDatabaseReadTimeout
 
@@ -40,10 +41,11 @@ final class PreIssConsensusModule[E <: Env[E]](
     clock: Clock,
     metrics: BftOrderingMetrics,
     segmentModuleRefFactory: SegmentModuleRefFactory[E],
+    random: Random,
     override val dependencies: ConsensusModuleDependencies[E],
     override val loggerFactory: NamedLoggerFactory,
     override val timeouts: ProcessingTimeout,
-)(implicit mc: MetricsContext, config: BftBlockOrderer.Config)
+)(implicit mc: MetricsContext, config: BftBlockOrdererConfig)
     extends Consensus[E]
     with HasDelayedInit[Consensus.Message[E]] {
 
@@ -71,12 +73,13 @@ final class PreIssConsensusModule[E <: Env[E]](
           metrics,
           segmentModuleRefFactory,
           new RetransmissionsManager[E](
-            bootstrapTopologyInfo.thisPeer,
+            bootstrapTopologyInfo.thisNode,
             dependencies.p2pNetworkOut,
             abort,
             previousEpochsCommitCerts,
             loggerFactory,
           ),
+          random,
           dependencies,
           loggerFactory,
           timeouts,
@@ -138,7 +141,6 @@ final class PreIssConsensusModule[E <: Env[E]](
       latestEpochFromStore.info,
       bootstrapTopologyInfo.currentMembership,
       bootstrapTopologyInfo.previousMembership,
-      SimpleLeaderSelectionPolicy,
     )
 
     new EpochState(

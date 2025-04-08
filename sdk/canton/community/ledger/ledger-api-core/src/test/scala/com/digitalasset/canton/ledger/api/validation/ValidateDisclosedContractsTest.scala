@@ -3,7 +3,6 @@
 
 package com.digitalasset.canton.ledger.api.validation
 
-import com.daml.error.{ContextualizedErrorLogger, NoLogging}
 import com.daml.ledger.api.v2.commands.{
   Commands as ProtoCommands,
   DisclosedContract as ProtoDisclosedContract,
@@ -19,6 +18,7 @@ import com.digitalasset.canton.ledger.api.validation.ValidateDisclosedContractsT
   lf,
   validateDisclosedContracts,
 }
+import com.digitalasset.canton.logging.{ContextualizedErrorLogger, NoLogging}
 import com.digitalasset.canton.platform.apiserver.execution.ContractAuthenticators.AuthenticateFatContractInstance
 import com.digitalasset.canton.protocol.{DriverContractMetadata, LfTransactionVersion}
 import com.digitalasset.daml.lf.data.{Bytes, ImmArray, Ref, Time}
@@ -48,7 +48,7 @@ class ValidateDisclosedContractsTest
 
   it should "fail validation on missing created event blob" in {
     val withMissingBlob =
-      ProtoCommands(disclosedContracts =
+      ProtoCommands.defaultInstance.withDisclosedContracts(
         scala.Seq(
           api.protoDisclosedContract.copy(
             createdEventBlob = ByteString.EMPTY
@@ -227,7 +227,7 @@ class ValidateDisclosedContractsTest
   it should "fail validation on invalid synchronizer_id" in {
     requestMustFailWith(
       request = validateDisclosedContracts(
-        ProtoCommands(disclosedContracts =
+        ProtoCommands.defaultInstance.copy(disclosedContracts =
           scala.Seq(api.protoDisclosedContract.copy(synchronizerId = "cantBe!"))
         )
       ),
@@ -268,10 +268,11 @@ object ValidateDisclosedContractsTest {
             throw new RuntimeException(s"Cannot serialize createdEventBlob: ${err.errorMessage}"),
           identity,
         ),
+      synchronizerId = "",
     )
 
     val protoCommands: ProtoCommands =
-      ProtoCommands(disclosedContracts = scala.Seq(api.protoDisclosedContract))
+      ProtoCommands.defaultInstance.copy(disclosedContracts = scala.Seq(api.protoDisclosedContract))
   }
 
   private object lf {

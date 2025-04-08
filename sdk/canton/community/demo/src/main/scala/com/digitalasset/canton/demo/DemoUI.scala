@@ -363,8 +363,12 @@ class ParticipantTab(
     val partyId = UniqueIdentifier.tryCreate(party, uid.namespace).toProtoPrimitive
     val req = new GetUpdatesRequest(
       beginExclusive = offset,
-      filter = Some(TransactionFilter(filtersByParty = Map(partyId -> Filters()))),
+      endInclusive = None,
+      filter = Some(
+        TransactionFilter(filtersByParty = Map(partyId -> Filters(Nil)), filtersForAnyParty = None)
+      ),
       verbose = true,
+      updateFormat = None,
     )
     updatesService.getUpdates(req, obs)
   }
@@ -421,7 +425,7 @@ class ParticipantTab(
         MetaInfo(Seq(), "", "")
       } else {
         val currentDars =
-          participant.dars.list().map(x => DarData(x.main, x.name, x.version))
+          participant.dars.list().map(x => DarData(x.mainPackageId, x.name, x.version))
         val hosted = participant.parties
           .hosted()
           .map(_.party.identifier.unwrap)

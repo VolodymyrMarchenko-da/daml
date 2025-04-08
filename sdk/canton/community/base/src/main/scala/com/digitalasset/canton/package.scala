@@ -37,17 +37,13 @@ package object canton {
   type LedgerCommandId = Ref.CommandId
   val LedgerCommandId: Ref.CommandId.type = Ref.CommandId
 
-  // Ledger application id
-  type LedgerApplicationId = Ref.ApplicationId
-  val LedgerApplicationId: Ref.ApplicationId.type = Ref.ApplicationId
+  // Ledger user id
+  type LedgerUserId = Ref.UserId
+  val LedgerUserId: Ref.UserId.type = Ref.UserId
 
   // Ledger transaction id
   type LedgerTransactionId = Ref.TransactionId
   val LedgerTransactionId: Ref.TransactionId.type = Ref.TransactionId
-
-  // Application Id
-  type LfApplicationId = Ref.ApplicationId
-  val LfApplicationId: Ref.ApplicationId.type = Ref.ApplicationId
 
   // Command Id
   type LfCommandId = Ref.CommandId
@@ -126,6 +122,8 @@ package object canton {
   type RequestCounterDiscriminator
   type RequestCounter = Counter[RequestCounterDiscriminator]
 
+  object RequestCounter extends CounterCompanion[RequestCounterDiscriminator]
+
   /** The counter assigned to a contract to count the number of its reassignments */
   type ReassignmentDiscriminator
   type ReassignmentCounter = Counter[ReassignmentDiscriminator]
@@ -136,7 +134,13 @@ package object canton {
     )
   }
 
-  object RequestCounter extends CounterCompanion[RequestCounterDiscriminator]
+  /** The counter assigned to a contract to track different repair changes. The counter is relative
+    * to a sequenced request timestamp.
+    */
+  type RepairCounterDiscriminator
+  type RepairCounter = Counter[RepairCounterDiscriminator]
+
+  object RepairCounter extends CounterCompanion[RepairCounterDiscriminator]
 
   /** Wrap a method call with this method to document that the caller is sure that the callee's
     * preconditions are met.

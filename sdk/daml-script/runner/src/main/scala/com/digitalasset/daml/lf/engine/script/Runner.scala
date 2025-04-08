@@ -5,8 +5,9 @@ package com.digitalasset.daml.lf
 package engine
 package script
 
-import org.apache.pekko.stream.Materializer
 import com.daml.grpc.adapter.ExecutionSequencerFactory
+import com.daml.logging.LoggingContext
+import com.daml.script.converter.ConverterException
 import com.daml.tls.TlsConfiguration
 import com.digitalasset.canton.ledger.client.LedgerClient
 import com.digitalasset.canton.ledger.client.configuration.{
@@ -14,6 +15,8 @@ import com.digitalasset.canton.ledger.client.configuration.{
   LedgerClientChannelConfiguration,
   LedgerClientConfiguration,
 }
+import com.digitalasset.canton.logging.NamedLoggerFactory
+import com.digitalasset.canton.tracing.TraceContext
 import com.digitalasset.daml.lf.archive.Dar
 import com.digitalasset.daml.lf.data.Ref
 import com.digitalasset.daml.lf.data.Ref._
@@ -24,8 +27,6 @@ import com.digitalasset.daml.lf.engine.script.ledgerinteraction.{
   ScriptLedgerClient,
 }
 import com.digitalasset.daml.lf.engine.script.v2.ledgerinteraction.grpcLedgerClient.AdminLedgerClient
-import com.digitalasset.daml.lf.typesig.EnvironmentSignature
-import com.digitalasset.daml.lf.typesig.reader.SignatureReader
 import com.digitalasset.daml.lf.language.Ast._
 import com.digitalasset.daml.lf.language.LanguageMajorVersion
 import com.digitalasset.daml.lf.language.LanguageVersionRangeOps._
@@ -42,13 +43,12 @@ import com.digitalasset.daml.lf.speedy.{
   TraceLog,
   WarningLog,
 }
+import com.digitalasset.daml.lf.typesig.EnvironmentSignature
+import com.digitalasset.daml.lf.typesig.reader.SignatureReader
 import com.digitalasset.daml.lf.value.Value.ContractId
 import com.digitalasset.daml.lf.value.json.ApiCodecCompressed
-import com.daml.logging.LoggingContext
-import com.daml.script.converter.ConverterException
-import com.digitalasset.canton.logging.NamedLoggerFactory
-import com.digitalasset.canton.tracing.TraceContext
 import com.typesafe.scalalogging.StrictLogging
+import org.apache.pekko.stream.Materializer
 import scalaz.OneAnd._
 import scalaz.std.either._
 import scalaz.std.map._
@@ -68,7 +68,7 @@ case class ApiParameters(
     host: String,
     port: Int,
     access_token: Option[String],
-    application_id: Option[Option[Ref.ApplicationId]],
+    user_id: Option[Option[Ref.UserId]],
     adminPort: Option[Int] = None,
 )
 case class Participants[+T](
@@ -165,12 +165,12 @@ object ParticipantsJsonProtocol extends DefaultJsonProtocol {
         case _ => deserializationError("ContractId must be a string")
       }
     }
-  implicit object ApplicationIdFormat extends JsonFormat[Option[Ref.ApplicationId]] {
+  implicit object UserIdFormat extends JsonFormat[Option[Ref.UserId]] {
     def read(value: JsValue) = value match {
-      case JsString(s) => Some(s).filter(_.nonEmpty).map(Ref.ApplicationId.assertFromString)
-      case _ => deserializationError("Expected ApplicationId string")
+      case JsString(s) => Some(s).filter(_.nonEmpty).map(Ref.UserId.assertFromString)
+      case _ => deserializationError("Expected UserId string")
     }
-    def write(id: Option[Ref.ApplicationId]) = JsString(id.getOrElse(""))
+    def write(id: Option[Ref.UserId]) = JsString(id.getOrElse(""))
   }
   implicit val apiParametersFormat: RootJsonFormat[ApiParameters] = jsonFormat5(ApiParameters)
   implicit val participantsFormat: RootJsonFormat[Participants[ApiParameters]] = jsonFormat3(
@@ -249,9 +249,9 @@ object Runner {
 
   val namedLoggerFactory: NamedLoggerFactory = NamedLoggerFactory("daml-script", "")
 
-  val BLANK_APPLICATION_ID: Option[Ref.ApplicationId] = None
-  val DEFAULT_APPLICATION_ID: Option[Ref.ApplicationId] = Some(
-    Ref.ApplicationId.assertFromString("daml-script")
+  val BLANK_USER_ID: Option[Ref.UserId] = None
+  val DEFAULT_USER_ID: Option[Ref.UserId] = Some(
+    Ref.UserId.assertFromString("daml-script")
   )
   private[script] def connectApiParameters(
       params: ApiParameters,
@@ -262,14 +262,14 @@ object Runner {
       seq: ExecutionSequencerFactory,
       traceContext: TraceContext,
   ): Future[GrpcLedgerClient] = {
-    val applicationId = params.application_id.getOrElse(
-      // If an application id was not supplied, but an access token was,
-      // we leave the application id empty so that the ledger will
+    val userId = params.user_id.getOrElse(
+      // If a user id was not supplied, but an access token was,
+      // we leave the user id empty so that the ledger will
       // determine it from the access token.
-      if (params.access_token.nonEmpty) BLANK_APPLICATION_ID else DEFAULT_APPLICATION_ID
+      if (params.access_token.nonEmpty) BLANK_USER_ID else DEFAULT_USER_ID
     )
     val clientConfig = LedgerClientConfiguration(
-      applicationId = applicationId.getOrElse(""),
+      userId = userId.getOrElse(""),
       commandClient = CommandClientConfiguration.default,
       token = params.access_token,
     )
@@ -277,17 +277,24 @@ object Runner {
       sslContext = tlsConfig.client(),
       maxInboundMessageSize = maxInboundMessageSize,
     )
-    LedgerClient
-      .singleHost(params.host, params.port, clientConfig, clientChannelConfig, namedLoggerFactory)
-      .map(
-        new GrpcLedgerClient(
-          _,
-          applicationId,
-          params.adminPort.map(p =>
-            AdminLedgerClient.singleHost(params.host, p, clientConfig.token, clientChannelConfig)
-          ),
-        )
+    for {
+      ledgerClient <- LedgerClient.singleHost(
+        params.host,
+        params.port,
+        clientConfig,
+        clientChannelConfig,
+        namedLoggerFactory,
       )
+      maybeAdminLedgerClient <- params.adminPort
+        .traverse(adminPort =>
+          AdminLedgerClient.singleHostWithUnknownParticipantId(
+            params.host,
+            adminPort,
+            clientConfig.token,
+            clientChannelConfig,
+          )
+        )
+    } yield GrpcLedgerClient(ledgerClient, userId, maybeAdminLedgerClient)
   }
   // We might want to have one config per participant at some point but for now this should be sufficient.
   def connect(

@@ -3,6 +3,7 @@
 
 package com.digitalasset.canton.platform.indexer.parallel
 
+import com.digitalasset.canton.RepairCounter
 import com.digitalasset.canton.data.{CantonTimestamp, Offset}
 import com.digitalasset.canton.ledger.participant.state.Update.CommandRejected.FinalReason
 import com.digitalasset.canton.ledger.participant.state.Update.{
@@ -15,7 +16,6 @@ import com.digitalasset.canton.ledger.participant.state.{CompletionInfo, Transac
 import com.digitalasset.canton.logging.{NamedLogging, SuppressingLogger}
 import com.digitalasset.canton.topology.SynchronizerId
 import com.digitalasset.canton.tracing.TraceContext
-import com.digitalasset.canton.{RequestCounter, SequencerCounter}
 import com.digitalasset.daml.lf.crypto
 import com.digitalasset.daml.lf.data.{Ref, Time}
 import com.digitalasset.daml.lf.transaction.CommittedTransaction
@@ -31,7 +31,7 @@ class PostPublishDataSpec extends AnyFlatSpec with Matchers with NamedLogging {
 
   private val synchronizerId = SynchronizerId.tryFromString("x::synchronizer1")
   private val party = Ref.Party.assertFromString("party")
-  private val applicationId = Ref.ApplicationId.assertFromString("applicationid1")
+  private val userId = Ref.UserId.assertFromString("userid1")
   private val cantonTime1 = CantonTimestamp.now()
   private val cantonTime2 = CantonTimestamp.now()
   private val commandId = Ref.CommandId.assertFromString(UUID.randomUUID().toString)
@@ -61,7 +61,7 @@ class PostPublishDataSpec extends AnyFlatSpec with Matchers with NamedLogging {
         completionInfoO = Some(
           CompletionInfo(
             actAs = List(party),
-            applicationId = applicationId,
+            userId = userId,
             commandId = commandId,
             optDeduplicationPeriod = None,
             submissionId = submissionId,
@@ -72,8 +72,6 @@ class PostPublishDataSpec extends AnyFlatSpec with Matchers with NamedLogging {
         updateId = updateId,
         contractMetadata = Map.empty,
         synchronizerId = synchronizerId,
-        requestCounter = RequestCounter(65),
-        sequencerCounter = SequencerCounter(11),
         recordTime = cantonTime2,
       )(TraceContext.empty),
       offset = offset,
@@ -82,10 +80,9 @@ class PostPublishDataSpec extends AnyFlatSpec with Matchers with NamedLogging {
       PostPublishData(
         submissionSynchronizerId = synchronizerId,
         publishSource = PublishSource.Sequencer(
-          requestSequencerCounter = SequencerCounter(11),
-          sequencerTimestamp = cantonTime2,
+          sequencerTimestamp = cantonTime2
         ),
-        applicationId = applicationId,
+        userId = userId,
         commandId = commandId,
         actAs = Set(party),
         offset = offset,
@@ -106,8 +103,6 @@ class PostPublishDataSpec extends AnyFlatSpec with Matchers with NamedLogging {
         updateId = updateId,
         contractMetadata = Map.empty,
         synchronizerId = synchronizerId,
-        requestCounter = RequestCounter(65),
-        sequencerCounter = SequencerCounter(11),
         recordTime = cantonTime2,
       )(TraceContext.empty),
       offset = offset,
@@ -123,7 +118,7 @@ class PostPublishDataSpec extends AnyFlatSpec with Matchers with NamedLogging {
         updateId = updateId,
         contractMetadata = Map.empty,
         synchronizerId = synchronizerId,
-        requestCounter = RequestCounter(65),
+        repairCounter = RepairCounter(65),
         recordTime = cantonTime2,
       )(TraceContext.empty),
       offset = offset,
@@ -136,15 +131,13 @@ class PostPublishDataSpec extends AnyFlatSpec with Matchers with NamedLogging {
       update = SequencedCommandRejected(
         completionInfo = CompletionInfo(
           actAs = List(party),
-          applicationId = applicationId,
+          userId = userId,
           commandId = commandId,
           optDeduplicationPeriod = None,
           submissionId = submissionId,
         ),
         reasonTemplate = FinalReason(status),
         synchronizerId = synchronizerId,
-        requestCounter = RequestCounter(65),
-        sequencerCounter = SequencerCounter(11),
         recordTime = cantonTime2,
       )(TraceContext.empty),
       offset = offset,
@@ -153,10 +146,9 @@ class PostPublishDataSpec extends AnyFlatSpec with Matchers with NamedLogging {
       PostPublishData(
         submissionSynchronizerId = synchronizerId,
         publishSource = PublishSource.Sequencer(
-          requestSequencerCounter = SequencerCounter(11),
-          sequencerTimestamp = cantonTime2,
+          sequencerTimestamp = cantonTime2
         ),
-        applicationId = applicationId,
+        userId = userId,
         commandId = commandId,
         actAs = Set(party),
         offset = offset,
@@ -173,7 +165,7 @@ class PostPublishDataSpec extends AnyFlatSpec with Matchers with NamedLogging {
       update = UnSequencedCommandRejected(
         completionInfo = CompletionInfo(
           actAs = List(party),
-          applicationId = applicationId,
+          userId = userId,
           commandId = commandId,
           optDeduplicationPeriod = None,
           submissionId = submissionId,
@@ -189,7 +181,7 @@ class PostPublishDataSpec extends AnyFlatSpec with Matchers with NamedLogging {
       PostPublishData(
         submissionSynchronizerId = synchronizerId,
         publishSource = PublishSource.Local(messageUuid),
-        applicationId = applicationId,
+        userId = userId,
         commandId = commandId,
         actAs = Set(party),
         offset = offset,

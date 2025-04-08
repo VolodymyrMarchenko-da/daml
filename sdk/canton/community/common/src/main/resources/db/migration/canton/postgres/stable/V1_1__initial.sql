@@ -84,7 +84,7 @@ create table par_contracts (
   -- We store metadata of the contract instance for inspection
   package_id varchar collate "C" not null,
   template_id varchar collate "C" not null,
-  contract_salt bytea,
+  contract_salt bytea not null,
   primary key (contract_id)
 );
 
@@ -154,15 +154,14 @@ create table par_active_contracts (
   operation operation_type not null,
   -- UTC timestamp of the time of change in microsecond precision relative to EPOCH
   ts bigint not null,
-  -- Request counter of the time of change
-  request_counter bigint not null,
+  -- Repair counter of the time of change lexicographically relative to ts, min-value for non-repairs
+  repair_counter bigint not null,
   -- optional remote synchronizer index in case of reassignments
   remote_synchronizer_idx integer,
   reassignment_counter bigint default null,
-  primary key (synchronizer_idx, contract_id, ts, request_counter, change)
+  primary key (synchronizer_idx, contract_id, ts, repair_counter, change)
 );
 
-create index idx_par_active_contracts_dirty_request_reset on par_active_contracts (synchronizer_idx, request_counter);
 create index idx_par_active_contracts_contract_id on par_active_contracts (contract_id);
 create index idx_par_active_contracts_ts_synchronizer_idx on par_active_contracts (ts, synchronizer_idx);
 create index idx_par_active_contracts_pruning on par_active_contracts (synchronizer_idx, ts) where change = 'deactivation';
@@ -192,7 +191,7 @@ create table med_response_aggregations (
   request_id bigint not null primary key,
   mediator_confirmation_request bytea not null,
   -- UTC timestamp is stored in microseconds relative to EPOCH
-  version bigint not null,
+  finalization_time bigint not null,
   verdict bytea not null,
   request_trace_context bytea not null
 );
@@ -265,7 +264,6 @@ create table par_reassignments (
 
   -- UTC timestamp in microseconds relative to EPOCH
   unassignment_timestamp bigint not null,
-  source_synchronizer_id varchar collate "C" not null,
   unassignment_request bytea,
   -- UTC timestamp in microseconds relative to EPOCH
   unassignment_decision_time bigint not null,
@@ -274,7 +272,6 @@ create table par_reassignments (
   -- defined if reassignment was completed
   -- UTC timestamp in microseconds relative to EPOCH
   assignment_timestamp bigint,
-  source_protocol_version integer not null,
   contract bytea not null
 );
 
@@ -288,10 +285,9 @@ create table par_journal_requests (
   -- UTC timestamp in microseconds relative to EPOCH
   -- is set only if the request is clean
   commit_time bigint,
-  repair_context varchar collate "C", -- only set on manual repair requests outside of sync protocol
   primary key (synchronizer_idx, request_counter)
 );
-create index idx_journal_request_timestamp on par_journal_requests (synchronizer_idx, request_timestamp);
+create unique index idx_journal_request_timestamp on par_journal_requests (synchronizer_idx, request_timestamp);
 create index idx_journal_request_commit_time on par_journal_requests (synchronizer_idx, commit_time);
 
 -- locally computed ACS commitments to a specific period, counter-participant and synchronizer
@@ -437,16 +433,6 @@ create table par_commitment_pruning (
   primary key (synchronizer_idx)
 );
 
--- Maintains the latest timestamp (by synchronizer) for which contract key journal pruning has started or finished
-create table par_contract_key_pruning (
-  synchronizer_idx integer not null,
-  phase pruning_phase not null,
-  -- UTC timestamp in microseconds relative to EPOCH
-  ts bigint not null,
-  succeeded bigint null,
-  primary key (synchronizer_idx)
-);
-
 -- Maintains the latest timestamp (by sequencer client) for which the sequenced event store pruning has started or finished
 create table common_sequenced_event_store_pruning (
   synchronizer_idx integer not null,
@@ -484,6 +470,10 @@ create table sequencer_members (
     member varchar collate "C" primary key,
     id serial unique,
     registered_ts bigint not null,
+    -- we keep the latest event's timestamp below the pruning timestamp,
+    -- so that we can produce a valid first event above the pruning timestamp with previousTimestamp populated
+    -- also used in sequencer state transfer
+    pruned_previous_event_timestamp bigint,
     enabled bool not null default true
 );
 
@@ -596,9 +586,6 @@ create table par_in_flight_submission (
   -- Sequencer timestamp after which this submission will not be sequenced any more, in microsecond precision relative to EPOCH
   -- If set, this submission is considered unsequenced.
   sequencing_timeout bigint,
-  -- Sequencer counter assigned to this submission.
-  -- Must be set iff sequencing_timeout is not set.
-  sequencer_counter bigint,
   -- Sequencer timestamp assigned to this submission, in microsecond precision relative to EPOCH
   -- Must be set iff sequencing_timeout is not set.
   sequencing_time bigint,
@@ -628,11 +615,11 @@ create table par_settings(
 );
 
 create table par_command_deduplication (
-  -- hash of the change ID (application_id + command_id + act_as) as a hex string
+  -- hash of the change ID (user_id + command_id + act_as) as a hex string
   change_id_hash varchar collate "C" primary key,
 
-  -- the application ID that requested the change
-  application_id varchar collate "C" not null,
+  -- the user ID that requested the change
+  user_id varchar collate "C" not null,
   -- the command ID
   command_id varchar collate "C" not null,
   -- the act as parties serialized as a Protobuf blob
@@ -695,22 +682,34 @@ create table common_pruning_schedules(
 create table seq_in_flight_aggregation(
   aggregation_id varchar collate "C" not null primary key,
   -- UTC timestamp in microseconds relative to EPOCH
+  first_sequencing_timestamp bigint not null,
+  -- UTC timestamp in microseconds relative to EPOCH
   max_sequencing_time bigint not null,
   -- serialized aggregation rule,
   aggregation_rule bytea not null
 );
 
-create index idx_seq_in_flight_aggregation_max_sequencing_time on seq_in_flight_aggregation(max_sequencing_time);
+-- NB: Do not add other indexes to this table, as this will confuse the planner to ignore the BRIN index
+create index idx_seq_in_flight_aggregation_temporal_brin
+    on seq_in_flight_aggregation
+    using brin (first_sequencing_timestamp, max_sequencing_time);
 
 create table seq_in_flight_aggregated_sender(
   aggregation_id varchar collate "C" not null,
   sender varchar collate "C" not null,
   -- UTC timestamp in microseconds relative to EPOCH
   sequencing_timestamp bigint not null,
+  -- UTC timestamp in microseconds relative to EPOCH
+  max_sequencing_time bigint not null,
   signatures bytea not null,
   primary key (aggregation_id, sender),
   constraint foreign_key_seq_in_flight_aggregated_sender foreign key (aggregation_id) references seq_in_flight_aggregation(aggregation_id) on delete cascade
 );
+
+-- NB: Do not add other indexes to this table, as this will confuse the planner to ignore the BRIN index
+create index idx_seq_in_flight_aggregated_sender_temporal_brin
+    on seq_in_flight_aggregated_sender
+        using brin (sequencing_timestamp, max_sequencing_time);
 
 -- stores the topology-x state transactions
 create table common_topology_transactions (
@@ -825,6 +824,8 @@ create table ord_epochs (
 create table ord_availability_batch (
   id varchar collate "C" not null,
   batch bytea not null,
+  -- assigned at batch creation and used to calculate epoch expiration
+  epoch_number bigint not null,
   primary key (id)
 );
 
@@ -888,6 +889,16 @@ create table ord_metadata_output_blocks (
 create table ord_metadata_output_epochs (
   epoch_number bigint not null primary key,
   could_alter_ordering_topology bool not null
+);
+
+-- inclusive lower bound of when blocks can be read.
+-- if empty it means all blocks can be read.
+-- is updated when bft-sequencer is pruned meaning that
+-- only events from later epochs can be served (earlier events have probably been pruned)
+create table ord_output_lower_bound (
+  single_row_lock char(1) not null default 'X' primary key check(single_row_lock = 'X'),
+  epoch_number bigint not null,
+  block_number bigint not null
 );
 
 -- Stores P2P endpoints from the configuration or admin command

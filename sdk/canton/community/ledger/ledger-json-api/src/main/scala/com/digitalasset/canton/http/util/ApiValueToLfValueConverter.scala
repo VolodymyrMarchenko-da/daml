@@ -3,9 +3,9 @@
 
 package com.digitalasset.canton.http.util
 
-import com.daml.error.NoLogging
 import com.daml.ledger.api.v2 as lav2
 import com.digitalasset.canton.ledger.api.validation.StricterValueValidator
+import com.digitalasset.canton.logging.NoLogging
 import com.digitalasset.daml.lf
 import io.grpc.StatusRuntimeException
 import scalaz.{Show, \/}

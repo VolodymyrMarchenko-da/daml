@@ -8,9 +8,7 @@ module Prelude (module X) where
 import DA.Internal.Prelude as X hiding (magic)
 import DA.Internal.LF as X hiding
   ( Pair(..)
-#ifdef DAML_TEXTMAP
   , TextMap
-#endif
   , Map
   , unpackPair
   , Any
@@ -24,3 +22,6 @@ import DA.Internal.Template.Functions as X
 import DA.Internal.Compatible as X
 import DA.Internal.Assert as X
 import DA.Internal.Interface as X
+-- Do not export the `message` field until exceptions have been removed (in 3.4)
+-- Explicit import of DA.Fail required to use field accessor
+import DA.Internal.Fail as X hiding (message)

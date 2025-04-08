@@ -103,7 +103,7 @@ object ExampleTransactionFactory {
   ): SerializableContract = {
     val unicumGenerator = new UnicumGenerator(new SymbolicPureCrypto())
     val contractIdVersion =
-      CantonContractIdVersion.fromProtocolVersion(BaseTest.testedProtocolVersion).value
+      CantonContractIdVersion.maximumSupportedVersion(BaseTest.testedProtocolVersion).value
 
     val (contractSalt, unicum) = unicumGenerator.generateSaltAndUnicum(
       synchronizerId = SynchronizerId(UniqueIdentifier.tryFromProtoPrimitive("synchronizer::da")),
@@ -115,6 +115,7 @@ object ExampleTransactionFactory {
       ledgerCreateTime = LedgerCreateTime(ledgerTime),
       metadata = metadata,
       suffixedContractInstance = ExampleTransactionFactory.asSerializableRaw(instance),
+      cantonContractIdVersion = contractIdVersion,
     )
 
     val contractId = contractIdVersion.fromDiscriminator(
@@ -127,7 +128,7 @@ object ExampleTransactionFactory {
       contractInstance = instance,
       metadata = metadata,
       ledgerTime = ledgerTime,
-      contractSalt = Some(contractSalt.unwrap),
+      contractSalt = contractSalt.unwrap,
     ).value
   }
 
@@ -350,7 +351,7 @@ object ExampleTransactionFactory {
       asSerializableRaw(contractInstance),
       metadata,
       LedgerCreateTime(ledgerTime),
-      Some(salt),
+      salt,
     )
 
   private def serializableFromCreate(
@@ -379,7 +380,7 @@ object ExampleTransactionFactory {
 
   // Request metadata
 
-  val applicationId: ApplicationId = DefaultDamlValues.applicationId()
+  val userId: UserId = DefaultDamlValues.userId()
   val commandId: CommandId = DefaultDamlValues.commandId()
   val workflowId: WorkflowId = WorkflowId.assertFromString("testWorkflowId")
 
@@ -443,7 +444,7 @@ class ExampleTransactionFactory(
     extends EitherValues {
 
   private val protocolVersion = versionOverride.getOrElse(BaseTest.testedProtocolVersion)
-  private val cantonContractIdVersion = AuthenticatedContractIdVersionV10
+  private val cantonContractIdVersion = AuthenticatedContractIdVersionV11
   private val random = new Random(0)
 
   private def createNewView(
@@ -566,6 +567,7 @@ class ExampleTransactionFactory(
         LedgerCreateTime(ledgerTime),
         metadata,
         asSerializableRaw(suffixedContractInstance),
+        cantonContractIdVersion,
       )
 
     contractSalt.unwrap -> unicum
@@ -780,7 +782,7 @@ class ExampleTransactionFactory(
   val submitterMetadata: SubmitterMetadata =
     SubmitterMetadata(
       NonEmpty(Set, submitter),
-      applicationId,
+      userId,
       commandId,
       submittingParticipant,
       Salt.tryDeriveSalt(transactionSeed, 0, cryptoOps),

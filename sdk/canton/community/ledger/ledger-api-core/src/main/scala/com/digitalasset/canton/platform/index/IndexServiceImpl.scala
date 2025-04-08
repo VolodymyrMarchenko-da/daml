@@ -3,18 +3,19 @@
 
 package com.digitalasset.canton.platform.index
 
-import com.daml.error.{ContextualizedErrorLogger, DamlErrorWithDefiniteAnswer}
 import com.daml.ledger.api.v2.command_completion_service.CompletionStreamResponse
 import com.daml.ledger.api.v2.event_query_service.GetEventsByContractIdResponse
 import com.daml.ledger.api.v2.state_service.GetActiveContractsResponse
 import com.daml.ledger.api.v2.update_service.{
   GetTransactionResponse,
   GetTransactionTreeResponse,
+  GetUpdateResponse,
   GetUpdateTreesResponse,
   GetUpdatesResponse,
 }
 import com.daml.metrics.InstrumentedGraph.*
 import com.daml.tracing.{Event, SpanAttribute, Spans}
+import com.digitalasset.base.error.DamlErrorWithDefiniteAnswer
 import com.digitalasset.canton.config
 import com.digitalasset.canton.config.NonNegativeFiniteDuration
 import com.digitalasset.canton.data.Offset
@@ -33,6 +34,7 @@ import com.digitalasset.canton.ledger.participant.state.index.*
 import com.digitalasset.canton.ledger.participant.state.index.MeteringStore.ReportData
 import com.digitalasset.canton.logging.LoggingContextWithTrace.implicitExtractTraceContext
 import com.digitalasset.canton.logging.{
+  ContextualizedErrorLogger,
   ErrorLoggingContext,
   LoggingContextWithTrace,
   NamedLoggerFactory,
@@ -43,6 +45,7 @@ import com.digitalasset.canton.pekkostreams.dispatcher.Dispatcher
 import com.digitalasset.canton.pekkostreams.dispatcher.DispatcherImpl.DispatcherIsClosedException
 import com.digitalasset.canton.pekkostreams.dispatcher.SubSource.RangeSource
 import com.digitalasset.canton.platform.index.IndexServiceImpl.*
+import com.digitalasset.canton.platform.store.backend.common.UpdatePointwiseQueries.LookupKey
 import com.digitalasset.canton.platform.store.cache.OffsetCheckpoint
 import com.digitalasset.canton.platform.store.dao.{
   EventProjectionProperties,
@@ -61,7 +64,7 @@ import com.digitalasset.canton.platform.{
   TemplatePartiesFilter,
 }
 import com.digitalasset.daml.lf.data.Ref
-import com.digitalasset.daml.lf.data.Ref.{ApplicationId, Identifier, PackageRef, TypeConRef}
+import com.digitalasset.daml.lf.data.Ref.{Identifier, PackageRef, TypeConRef, UserId}
 import com.digitalasset.daml.lf.data.Time.Timestamp
 import com.digitalasset.daml.lf.transaction.GlobalKey
 import com.digitalasset.daml.lf.value.Value.{ContractId, VersionedContractInstance}
@@ -84,7 +87,6 @@ private[index] class IndexServiceImpl(
     getPackageMetadataSnapshot: ContextualizedErrorLogger => PackageMetadata,
     metrics: LedgerApiServerMetrics,
     idleStreamOffsetCheckpointTimeout: config.NonNegativeFiniteDuration,
-    experimentalEnableTopologyEvents: Boolean,
     override protected val loggerFactory: NamedLoggerFactory,
 ) extends IndexService
     with NamedLogging {
@@ -137,7 +139,6 @@ private[index] class IndexServiceImpl(
                   getPackageMetadataSnapshot = getPackageMetadataSnapshot,
                   updateFormat = updateFormat,
                   alwaysPopulateArguments = false,
-                  enableTopologyEvents = experimentalEnableTopologyEvents,
                 )
               (startInclusive, endInclusive) =>
                 Source(memoInternalUpdateFormat().toList)
@@ -281,7 +282,7 @@ private[index] class IndexServiceImpl(
 
   override def getCompletions(
       startExclusive: Option[Offset],
-      applicationId: Ref.ApplicationId,
+      userId: Ref.UserId,
       parties: Set[Ref.Party],
   )(implicit loggingContext: LoggingContextWithTrace): Source[CompletionStreamResponse, NotUsed] =
     Source
@@ -295,7 +296,7 @@ private[index] class IndexServiceImpl(
                 .getCommandCompletions(
                   startInclusive,
                   endInclusive,
-                  applicationId,
+                  userId,
                   parties,
                 )
                 .via(
@@ -431,6 +432,32 @@ private[index] class IndexServiceImpl(
       )
   }
 
+  override def getUpdateBy(
+      lookupKey: LookupKey,
+      updateFormat: UpdateFormat,
+  )(implicit loggingContext: LoggingContextWithTrace): Future[Option[GetUpdateResponse]] = {
+    val currentPackageMetadata = getPackageMetadataSnapshot(implicitly)
+    checkUnknownIdentifiers(updateFormat, currentPackageMetadata).left
+      .map(_.asGrpcError)
+      .fold(
+        Future.failed,
+        _ => {
+          // even though memoization is not needed here, we are re-using the function
+          val internalUpdateFormatO = memoizedInternalUpdateFormat(
+            getPackageMetadataSnapshot = getPackageMetadataSnapshot,
+            updateFormat = updateFormat,
+            alwaysPopulateArguments = false,
+          ).apply()
+
+          internalUpdateFormatO match {
+            case Some(internalUpdateFormat) =>
+              updatesReader.lookupUpdateBy(lookupKey, internalUpdateFormat)
+            case None => Future.successful(None)
+          }
+        },
+      )
+  }
+
   override def getTransactionTreeByOffset(
       offset: Offset,
       requestingParties: Set[Ref.Party],
@@ -504,12 +531,12 @@ private[index] class IndexServiceImpl(
   override def getMeteringReportData(
       from: Timestamp,
       to: Option[Timestamp],
-      applicationId: Option[ApplicationId],
+      userId: Option[UserId],
   )(implicit loggingContext: LoggingContextWithTrace): Future[ReportData] =
     ledgerDao.meteringReportData(
       from: Timestamp,
       to: Option[Timestamp],
-      applicationId: Option[ApplicationId],
+      userId: Option[UserId],
     )
 
   override def currentLedgerEnd(): Future[Option[Offset]] =
@@ -743,7 +770,6 @@ object IndexServiceImpl {
       getPackageMetadataSnapshot: ContextualizedErrorLogger => PackageMetadata,
       updateFormat: UpdateFormat,
       alwaysPopulateArguments: Boolean, // TODO(#23504) remove the field since it will always be false after removing transaction trees
-      enableTopologyEvents: Boolean,
   )(implicit
       contextualizedErrorLogger: ContextualizedErrorLogger
   ): () => Option[InternalUpdateFormat] = {
@@ -775,7 +801,7 @@ object IndexServiceImpl {
         )
       }
 
-      val topologyEvents = if (enableTopologyEvents) updateFormat.includeTopologyEvents else None
+      val topologyEvents = updateFormat.includeTopologyEvents
 
       if (
         internalTransactionFormat.isEmpty &&

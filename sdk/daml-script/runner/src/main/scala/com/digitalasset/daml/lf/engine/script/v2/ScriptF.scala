@@ -8,14 +8,15 @@ package v2
 
 import com.daml.grpc.adapter.ExecutionSequencerFactory
 import com.digitalasset.daml.lf.CompiledPackages
-import com.digitalasset.daml.lf.data.FrontStack
+import com.digitalasset.daml.lf.data.cctp.MessageSignatureUtil
+import com.digitalasset.daml.lf.data.{Bytes, FrontStack}
 import com.digitalasset.daml.lf.data.Ref._
 import com.digitalasset.daml.lf.data.Time.Timestamp
 import com.digitalasset.daml.lf.engine.preprocessing.ValueTranslator
 import com.digitalasset.daml.lf.engine.script.v2.ledgerinteraction.ScriptLedgerClient
 import com.digitalasset.daml.lf.interpretation.{Error => IE}
 import com.digitalasset.daml.lf.language.{Ast, LanguageVersion}
-import com.digitalasset.daml.lf.speedy.SBuiltinFun.{SBToAny, SBVariantCon}
+import com.digitalasset.daml.lf.speedy.SBuiltinFun.{SBThrow, SBToAny, SBVariantCon}
 import com.digitalasset.daml.lf.speedy.SExpr._
 import com.digitalasset.daml.lf.speedy.SValue._
 import com.digitalasset.daml.lf.speedy.{ArrayList, SError, SValue}
@@ -31,6 +32,8 @@ import scalaz.std.option._
 import scalaz.syntax.traverse._
 import scalaz.{Foldable, OneAnd}
 
+import java.security.{KeyFactory, SecureRandom}
+import java.security.spec.PKCS8EncodedKeySpec
 import java.time.Clock
 import scala.concurrent.{ExecutionContext, Future}
 import scala.util.{Failure, Success}
@@ -47,7 +50,11 @@ object ScriptF {
   )
 
   sealed trait Cmd {
-    private[lf] def executeWithRunner(env: Env, @annotation.unused runner: v2.Runner)(implicit
+    private[lf] def executeWithRunner(
+        env: Env,
+        @annotation.unused runner: v2.Runner,
+        @annotation.unused convertLegacyExceptions: Boolean,
+    )(implicit
         ec: ExecutionContext,
         mat: Materializer,
         esf: ExecutionSequencerFactory,
@@ -97,6 +104,15 @@ object ScriptF {
         case Left(err) => Left(err.pretty)
       }
 
+    def lookupVariantConstructorRank(
+        tyCon: Identifier,
+        consName: Name,
+    ): Either[String, Int] =
+      compiledPackages.pkgInterface.lookupVariantConstructor(tyCon, consName) match {
+        case Right(info) => Right(info.rank)
+        case Left(err) => Left(err.pretty)
+      }
+
     def translateValue(ty: Ast.Type, value: Value): Either[String, SValue] =
       valueTranslator.strictTranslateValue(ty, value).left.map(_.toString)
 
@@ -113,45 +129,43 @@ object ScriptF {
     override def execute(
         env: Env
     )(implicit ec: ExecutionContext, mat: Materializer, esf: ExecutionSequencerFactory) =
-      Future.failed(
-        free.InterpretationError(
-          SError
-            .SErrorDamlException(IE.UnhandledException(exc.ty, exc.value.toUnnormalizedValue))
-        )
-      )
+      Future.successful(SBThrow(SEValue(exc)))
   }
 
   final case class Catch(act: SValue) extends Cmd {
-    override def executeWithRunner(env: Env, runner: v2.Runner)(implicit
+    override def executeWithRunner(env: Env, runner: v2.Runner, convertLegacyExceptions: Boolean)(
+        implicit
         ec: ExecutionContext,
         mat: Materializer,
         esf: ExecutionSequencerFactory,
     ): Future[SExpr] =
-      runner.run(SEAppAtomic(SEValue(act), Array(SEValue(SUnit)))).transformWith {
-        case Success(v) =>
-          Future.successful(SEAppAtomic(right, Array(SEValue(v))))
-        case Failure(
-              free.InterpretationError(
-                SError.SErrorDamlException(IE.UnhandledException(typ, value))
-              )
-            ) =>
-          env.translateValue(typ, value) match {
-            case Right(sVal) =>
-              Future.successful(
-                SELet1(
-                  SEAppAtomic(SEBuiltinFun(SBToAny(typ)), Array(SEValue(sVal))),
-                  SEAppAtomic(left, Array(SELocS(1))),
+      runner
+        .run(SEAppAtomic(SEValue(act), Array(SEValue(SUnit))), convertLegacyExceptions = false)
+        .transformWith {
+          case Success(v) =>
+            Future.successful(SEAppAtomic(right, Array(SEValue(v))))
+          case Failure(
+                free.InterpretationError(
+                  SError.SErrorDamlException(IE.UnhandledException(typ, value))
                 )
-              )
-            // This shouldn't ever happen, as these can only come from our engine
-            case Left(err) =>
-              Future.failed(
-                new RuntimeException(s"Daml-script thrown error couldn't be translated: $err")
-              )
-          }
+              ) =>
+            env.translateValue(typ, value) match {
+              case Right(sVal) =>
+                Future.successful(
+                  SELet1(
+                    SEAppAtomic(SEBuiltinFun(SBToAny(typ)), Array(SEValue(sVal))),
+                    SEAppAtomic(left, Array(SELocS(1))),
+                  )
+                )
+              // This shouldn't ever happen, as these can only come from our engine
+              case Left(err) =>
+                Future.failed(
+                  new RuntimeException(s"Daml-script thrown error couldn't be translated: $err")
+                )
+            }
 
-        case Failure(e) => Future.failed(e)
-      }
+          case Failure(e) => Future.failed(e)
+        }
 
     override def execute(env: Env)(implicit
         ec: ExecutionContext,
@@ -519,6 +533,47 @@ object ScriptF {
     }
   }
 
+  final case class Secp256k1Sign(pk: String, msg: String) extends Cmd {
+    override def execute(env: Env)(implicit
+        ec: ExecutionContext,
+        mat: Materializer,
+        esf: ExecutionSequencerFactory,
+    ): Future[SExpr] = Future {
+      // By using a deterministic PRNG and setting the seed to a fixed value each time we sign a message, we ensure
+      // that secp256k1 signing uses a deterministic source of randomness and so behaves deterministically.
+      val deterministicRandomSrc: SecureRandom = SecureRandom.getInstance("SHA1PRNG")
+      deterministicRandomSrc.setSeed(1)
+      val keySpec =
+        new PKCS8EncodedKeySpec(HexString.decode(HexString.assertFromString(pk)).toByteArray)
+      val privateKey = KeyFactory.getInstance("EC").generatePrivate(keySpec)
+      val message = HexString.assertFromString(msg)
+
+      SEValue(SText(MessageSignatureUtil.sign(message, privateKey, deterministicRandomSrc)))
+    }
+  }
+
+  final case class Secp256k1GenerateKeyPair() extends Cmd {
+    override def execute(env: Env)(implicit
+        ec: ExecutionContext,
+        mat: Materializer,
+        esf: ExecutionSequencerFactory,
+    ): Future[SExpr] = Future {
+      val keyPair = MessageSignatureUtil.generateKeyPair
+      val privateKey = HexString.encode(Bytes.fromByteArray(keyPair.getPrivate.getEncoded))
+      val publicKey = HexString.encode(Bytes.fromByteArray(keyPair.getPublic.getEncoded))
+
+      import com.daml.script.converter.Converter.record
+      SEValue(
+        record(
+          env.scriptIds
+            .damlScriptModule("Daml.Script.Internal.Questions.Crypto.Text", "Secp256k1KeyPair"),
+          "privateKey" -> SText(privateKey),
+          "publicKey" -> SText(publicKey),
+        )
+      )
+    }
+  }
+
   final case class ValidateUserId(
       userName: String
   ) extends Cmd {
@@ -687,7 +742,8 @@ object ScriptF {
   }
 
   final case class VetPackages(
-      packages: List[ScriptLedgerClient.ReadablePackageId]
+      packages: List[ScriptLedgerClient.ReadablePackageId],
+      participant: Option[Participant],
   ) extends Cmd {
     override def execute(env: Env)(implicit
         ec: ExecutionContext,
@@ -695,13 +751,14 @@ object ScriptF {
         esf: ExecutionSequencerFactory,
     ): Future[SExpr] =
       for {
-        client <- Converter.toFuture(env.clients.getParticipant(None))
+        client <- Converter.toFuture(env.clients.getParticipant(participant))
         _ <- client.vetPackages(packages)
       } yield SEValue(SUnit)
   }
 
   final case class UnvetPackages(
-      packages: List[ScriptLedgerClient.ReadablePackageId]
+      packages: List[ScriptLedgerClient.ReadablePackageId],
+      participant: Option[Participant],
   ) extends Cmd {
     override def execute(env: Env)(implicit
         ec: ExecutionContext,
@@ -709,7 +766,7 @@ object ScriptF {
         esf: ExecutionSequencerFactory,
     ): Future[SExpr] =
       for {
-        client <- Converter.toFuture(env.clients.getParticipant(None))
+        client <- Converter.toFuture(env.clients.getParticipant(participant))
         _ <- client.unvetPackages(packages)
       } yield SEValue(SUnit)
   }
@@ -742,43 +799,14 @@ object ScriptF {
       )
   }
 
-  final case class VetDar(
-      darName: String,
-      participant: Option[Participant],
-  ) extends Cmd {
-    override def execute(env: Env)(implicit
-        ec: ExecutionContext,
-        mat: Materializer,
-        esf: ExecutionSequencerFactory,
-    ): Future[SExpr] =
-      for {
-        client <- Converter.toFuture(env.clients.getParticipant(participant))
-        _ <- client.vetDar(darName)
-      } yield SEValue(SUnit)
-  }
-
-  final case class UnvetDar(
-      darName: String,
-      participant: Option[Participant],
-  ) extends Cmd {
-    override def execute(env: Env)(implicit
-        ec: ExecutionContext,
-        mat: Materializer,
-        esf: ExecutionSequencerFactory,
-    ): Future[SExpr] =
-      for {
-        client <- Converter.toFuture(env.clients.getParticipant(participant))
-        _ <- client.unvetDar(darName)
-      } yield SEValue(SUnit)
-  }
-
   final case class TryCommands(act: SValue) extends Cmd {
-    override def executeWithRunner(env: Env, runner: v2.Runner)(implicit
+    override def executeWithRunner(env: Env, runner: v2.Runner, convertLegacyExceptions: Boolean)(
+        implicit
         ec: ExecutionContext,
         mat: Materializer,
         esf: ExecutionSequencerFactory,
     ): Future[SExpr] =
-      runner.run(SEValue(act)).transformWith {
+      runner.run(SEValue(act), convertLegacyExceptions).transformWith {
         case Success(v) =>
           Future.successful(SEAppAtomic(right, Array(SEValue(v))))
         case Failure(
@@ -818,6 +846,15 @@ object ScriptF {
         mat: Materializer,
         esf: ExecutionSequencerFactory,
     ): Future[SExpr] = Future.failed(new NotImplementedError)
+  }
+
+  final case class FailWithStatus(failureStatus: IE.FailureStatus) extends Cmd {
+    override def execute(env: Env)(implicit
+        ec: ExecutionContext,
+        mat: Materializer,
+        esf: ExecutionSequencerFactory,
+    ): Future[SExpr] =
+      Future.failed(free.InterpretationError(SError.SErrorDamlException(failureStatus)))
   }
 
   final case class Ctx(knownPackages: Map[String, PackageId], compiledPackages: CompiledPackages)
@@ -975,6 +1012,16 @@ object ScriptF {
       case _ => Left(s"Expected SetTime payload but got $v")
     }
 
+  private def parseSecp256k1Sign(v: SValue): Either[String, Secp256k1Sign] =
+    v match {
+      case SRecord(_, _, ArrayList(pk, msg)) =>
+        for {
+          pk <- toText(pk)
+          msg <- toText(msg)
+        } yield Secp256k1Sign(pk, msg)
+      case _ => Left(s"Expected Secp256k1Sign payload but got $v")
+    }
+
   private def parseSleep(v: SValue): Either[String, Sleep] =
     v match {
       case SRecord(_, _, ArrayList(SRecord(_, _, ArrayList(SInt64(micros))))) =>
@@ -1076,9 +1123,10 @@ object ScriptF {
       case _ => Left(s"Expected ListUserRights payload but got $v")
     }
 
-  private def parseChangePackages(
-      v: SValue
-  ): Either[String, List[ScriptLedgerClient.ReadablePackageId]] = {
+  private def parseChangePackages[A](
+      v: SValue,
+      wrap: (List[ScriptLedgerClient.ReadablePackageId], Option[Participant]) => A,
+  ): Either[String, A] = {
     def toReadablePackageId(s: SValue): Either[String, ScriptLedgerClient.ReadablePackageId] =
       s match {
         case SRecord(_, _, ArrayList(SText(name), SText(version))) =>
@@ -1089,28 +1137,43 @@ object ScriptF {
         case _ => Left(s"Expected PackageName but got $s")
       }
     v match {
-      case SRecord(_, _, ArrayList(packages)) =>
-        Converter.toList(packages, toReadablePackageId)
-      case _ => Left(s"Expected Packages payload but got $v")
+      case SRecord(_, _, ArrayList(packages, participant)) =>
+        for {
+          packageIds <- Converter.toList(packages, toReadablePackageId)
+          participant <- Converter.toParticipantName(participant)
+        } yield wrap(packageIds, participant)
+      case _ => Left(s"Expected (Vet|Unvet)Packages payload but got $v")
     }
   }
-
-  private def parseDarVettingChange[A](
-      v: SValue,
-      wrap: (String, Option[Participant]) => A,
-  ): Either[String, A] =
-    v match {
-      case SRecord(_, _, ArrayList(SText(name), participant)) =>
-        for {
-          participant <- Converter.toParticipantName(participant)
-        } yield wrap(name, participant)
-      case _ => Left(s"Expected VetDar payload but got $v")
-    }
 
   private def parseTryCommands(v: SValue): Either[String, TryCommands] =
     v match {
       case SRecord(_, _, ArrayList(act)) => Right(TryCommands(act))
       case _ => Left(s"Expected TryCommands payload but got $v")
+    }
+
+  private def parseFailWithStatus(v: SValue): Either[String, FailWithStatus] =
+    v match {
+      case SRecord(
+            _,
+            _,
+            ArrayList(
+              SRecord(
+                _,
+                _,
+                ArrayList(SText(errorId), SInt64(categoryId), SText(message), SMap(true, treeMap)),
+              )
+            ),
+          ) =>
+        treeMap.toList
+          .traverse {
+            case (SText(key), SText(value)) => Right((key, value))
+            case v => Left(s"Expected (Text, Text) but got $v")
+          }
+          .map(meta =>
+            FailWithStatus(IE.FailureStatus(errorId, categoryId.toInt, message, Map.from(meta)))
+          )
+      case _ => Left(s"Expected FailWithStatus payload but got $v")
     }
 
   def parse(
@@ -1131,6 +1194,8 @@ object ScriptF {
       case ("GetTime", 1) => parseEmpty(GetTime())(v)
       case ("SetTime", 1) => parseSetTime(v)
       case ("Sleep", 1) => parseSleep(v)
+      case ("Secp256k1Sign", 1) => parseSecp256k1Sign(v)
+      case ("Secp256k1GenerateKeyPair", 1) => parseEmpty(Secp256k1GenerateKeyPair())(v)
       case ("Catch", 1) => parseCatch(v)
       case ("Throw", 1) => parseThrow(v)
       case ("ValidateUserId", 1) => parseValidateUserId(v)
@@ -1141,13 +1206,12 @@ object ScriptF {
       case ("GrantUserRights", 1) => parseGrantUserRights(v)
       case ("RevokeUserRights", 1) => parseRevokeUserRights(v)
       case ("ListUserRights", 1) => parseListUserRights(v)
-      case ("VetPackages", 1) => parseChangePackages(v).map(VetPackages)
-      case ("UnvetPackages", 1) => parseChangePackages(v).map(UnvetPackages)
+      case ("VetPackages", 1) => parseChangePackages(v, VetPackages)
+      case ("UnvetPackages", 1) => parseChangePackages(v, UnvetPackages)
       case ("ListVettedPackages", 1) => parseEmpty(ListVettedPackages())(v)
       case ("ListAllPackages", 1) => parseEmpty(ListAllPackages())(v)
-      case ("VetDar", 1) => parseDarVettingChange(v, VetDar)
-      case ("UnvetDar", 1) => parseDarVettingChange(v, UnvetDar)
       case ("TryCommands", 1) => parseTryCommands(v)
+      case ("FailWithStatus", 1) => parseFailWithStatus(v)
       case _ => Left(s"Unknown command $commandName - Version $version")
     }
 

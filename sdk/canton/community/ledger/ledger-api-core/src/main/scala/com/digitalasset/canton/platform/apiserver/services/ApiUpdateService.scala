@@ -11,7 +11,12 @@ import com.daml.tracing.Telemetry
 import com.digitalasset.canton.data.Offset
 import com.digitalasset.canton.ledger.api.grpc.StreamingServiceLifecycleManagement
 import com.digitalasset.canton.ledger.api.validation.UpdateServiceRequestValidator
-import com.digitalasset.canton.ledger.api.{TransactionFormat, UpdateId, ValidationLogger}
+import com.digitalasset.canton.ledger.api.{
+  TransactionFormat,
+  UpdateFormat,
+  UpdateId,
+  ValidationLogger,
+}
 import com.digitalasset.canton.ledger.error.groups.RequestValidationErrors
 import com.digitalasset.canton.ledger.participant.state.index.IndexUpdateService
 import com.digitalasset.canton.logging.LoggingContextWithTrace.implicitExtractTraceContext
@@ -23,6 +28,7 @@ import com.digitalasset.canton.logging.{
   NamedLogging,
 }
 import com.digitalasset.canton.metrics.LedgerApiServerMetrics
+import com.digitalasset.canton.platform.store.backend.common.UpdatePointwiseQueries.LookupKey
 import com.digitalasset.canton.util.Thereafter.syntax.*
 import io.grpc.stub.StreamObserver
 import org.apache.pekko.stream.Materializer
@@ -101,6 +107,7 @@ final class ApiUpdateService(
             endInclusive = request.endInclusive,
             filter = request.filter,
             verbose = request.verbose,
+            updateFormat = None,
           ),
           ledgerEnd,
         )
@@ -298,6 +305,79 @@ final class ApiUpdateService(
       )
   }
 
+  override def getUpdateByOffset(
+      req: GetUpdateByOffsetRequest
+  ): Future[GetUpdateResponse] = {
+    implicit val loggingContextWithTrace: LoggingContextWithTrace =
+      LoggingContextWithTrace(loggerFactory, telemetry)
+    implicit val errorLoggingContext: ErrorLoggingContext =
+      ErrorLoggingContext(logger, loggingContextWithTrace)
+
+    UpdateServiceRequestValidator
+      .validateUpdateByOffset(req)
+      .fold(
+        t => Future.failed(ValidationLogger.logFailureWithTrace(logger, req, t)),
+        request => {
+          implicit val enrichedLoggingContext: LoggingContextWithTrace =
+            LoggingContextWithTrace.enriched(
+              logging.offset(request.offset.unwrap),
+              logging.updateFormat(request.updateFormat),
+            )(loggingContextWithTrace)
+          logger.info(s"Received request for update by offset, ${enrichedLoggingContext
+              .serializeFiltered("offset", "updateFormat")}.")(loggingContextWithTrace.traceContext)
+          logger.trace(s"Update by offset request: $request")(
+            loggingContextWithTrace.traceContext
+          )
+          val offset = request.offset
+          OptionT(
+            updateService.getUpdateBy(LookupKey.Offset(offset), request.updateFormat)(
+              loggingContextWithTrace
+            )
+          )
+            .getOrElseF(
+              Future.failed(
+                RequestValidationErrors.NotFound.Update.RejectWithOffset(offset.unwrap).asGrpcError
+              )
+            )
+            .thereafter(
+              logger.logErrorsOnCall[GetUpdateResponse](loggingContextWithTrace.traceContext)
+            )
+        },
+      )
+  }
+
+  override def getUpdateById(
+      req: GetUpdateByIdRequest
+  ): Future[GetUpdateResponse] = {
+    val loggingContextWithTrace = LoggingContextWithTrace(loggerFactory, telemetry)
+    val errorLoggingContext = ErrorLoggingContext(logger, loggingContextWithTrace)
+
+    UpdateServiceRequestValidator
+      .validateUpdateById(req)(errorLoggingContext)
+      .fold(
+        t =>
+          Future
+            .failed(ValidationLogger.logFailureWithTrace(logger, req, t)(loggingContextWithTrace)),
+        request => {
+          implicit val enrichedLoggingContext: LoggingContextWithTrace =
+            LoggingContextWithTrace.enriched(
+              logging.updateId(request.updateId),
+              logging.updateFormat(request.updateFormat),
+            )(loggingContextWithTrace)
+          logger.info(
+            s"Received request for update by ID, ${enrichedLoggingContext
+                .serializeFiltered("eventId", "updateFormat")}."
+          )(loggingContextWithTrace.traceContext)
+          logger.trace(s"Update by ID request: $request")(loggingContextWithTrace.traceContext)
+
+          internalGetUpdateById(request.updateId, request.updateFormat)
+            .thereafter(
+              logger.logErrorsOnCall[GetUpdateResponse](loggingContextWithTrace.traceContext)
+            )
+        },
+      )
+  }
+
   private def internalGetTransactionById(
       updateId: UpdateId,
       transactionFormat: TransactionFormat,
@@ -324,6 +404,19 @@ final class ApiUpdateService(
         )
       )
 
+  private def internalGetUpdateById(
+      updateId: UpdateId,
+      updateFormat: UpdateFormat,
+  )(implicit
+      loggingContextWithTrace: LoggingContextWithTrace
+  ): Future[GetUpdateResponse] =
+    OptionT(updateService.getUpdateBy(LookupKey.UpdateId(updateId.unwrap), updateFormat))
+      .getOrElseF(
+        Future.failed(
+          RequestValidationErrors.NotFound.Update.RejectWithTxId(updateId.unwrap).asGrpcError
+        )
+      )
+
   private def updatesLoggable(updates: GetUpdatesResponse): LoggingEntries =
     updates.update match {
       case GetUpdatesResponse.Update.Transaction(t) =>
@@ -346,8 +439,6 @@ final class ApiUpdateService(
         entityLoggable(r.commandId, r.updateId, r.workflowId, r.offset)
       case GetUpdateTreesResponse.Update.OffsetCheckpoint(c) =>
         LoggingEntries(logging.offset(c.offset))
-      case GetUpdateTreesResponse.Update.TopologyTransaction(tt) =>
-        LoggingEntries(logging.offset(tt.offset))
       case GetUpdateTreesResponse.Update.Empty =>
         LoggingEntries()
     }

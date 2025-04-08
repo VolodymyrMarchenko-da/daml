@@ -58,16 +58,23 @@ import com.digitalasset.canton.synchronizer.sequencer.admin.grpc.{
   InitializeSequencerResponse,
 }
 import com.digitalasset.canton.synchronizer.sequencer.config.{
-  SequencerNodeConfigCommon,
+  SequencerNodeConfig,
   SequencerNodeParameters,
 }
 import com.digitalasset.canton.synchronizer.sequencer.store.{
   SequencerSynchronizerConfiguration,
   SequencerSynchronizerConfigurationStore,
 }
-import com.digitalasset.canton.synchronizer.sequencing.authentication.MemberAuthenticationServiceFactory
+import com.digitalasset.canton.synchronizer.sequencing.authentication.grpc.SequencerAuthenticationServerInterceptor
+import com.digitalasset.canton.synchronizer.sequencing.authentication.{
+  MemberAuthenticationServiceFactory,
+  MemberAuthenticationStore,
+}
+import com.digitalasset.canton.synchronizer.sequencing.service.channel.GrpcSequencerChannelService
 import com.digitalasset.canton.synchronizer.sequencing.service.{
+  GrpcSequencerAuthenticationService,
   GrpcSequencerInitializationService,
+  GrpcSequencerService,
   GrpcSequencerStatusService,
 }
 import com.digitalasset.canton.synchronizer.sequencing.topology.{
@@ -94,7 +101,7 @@ import com.digitalasset.canton.topology.transaction.{
   SequencerSynchronizerState,
   SynchronizerTrustCertificate,
 }
-import com.digitalasset.canton.tracing.TraceContext
+import com.digitalasset.canton.tracing.{TraceContext, Traced}
 import com.digitalasset.canton.util.{EitherTUtil, SingleUseCell}
 import com.digitalasset.canton.version.{ProtocolVersion, ReleaseVersion}
 import io.grpc.ServerServiceDefinition
@@ -104,26 +111,13 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.atomic.AtomicReference
 
 object SequencerNodeBootstrap {
-  trait Factory[C <: SequencerNodeConfigCommon] {
-    def create(
-        arguments: NodeFactoryArguments[
-          C,
-          SequencerNodeParameters,
-          SequencerMetrics,
-        ]
-    )(implicit
-        executionContext: ExecutionContextIdlenessExecutorService,
-        scheduler: ScheduledExecutorService,
-        actorSystem: ActorSystem,
-    ): Either[String, SequencerNodeBootstrap]
-  }
 
   val LoggerFactoryKeyName: String = "sequencer"
 }
 
 class SequencerNodeBootstrap(
     arguments: CantonNodeBootstrapCommonArguments[
-      SequencerNodeConfigCommon,
+      SequencerNodeConfig,
       SequencerNodeParameters,
       SequencerMetrics,
     ],
@@ -134,7 +128,7 @@ class SequencerNodeBootstrap(
     actorSystem: ActorSystem,
 ) extends CantonNodeBootstrapImpl[
       SequencerNode,
-      SequencerNodeConfigCommon,
+      SequencerNodeConfig,
       SequencerNodeParameters,
       SequencerMetrics,
     ](arguments) {
@@ -203,7 +197,7 @@ class SequencerNodeBootstrap(
     override def getAdminToken: Option[String] = Some(adminToken.secret)
 
     // add initialization service
-    val (initializationServiceDef, _) = adminServerRegistry.addService(
+    private val (initializationServiceDef, _) = adminServerRegistry.addService(
       SequencerInitializationServiceGrpc.bindService(
         new GrpcSequencerInitializationService(this, loggerFactory)(executionContext),
         executionContext,
@@ -632,7 +626,7 @@ class SequencerNodeBootstrap(
               // TODO(#22362): Enable correct config
               // parameters.sessionSigningKeys
               SessionSigningKeysConfig.disabled,
-              parameters.batchingConfig.parallelism.unwrap,
+              parameters.batchingConfig.parallelism,
               parameters.processingTimeouts,
               futureSupervisor,
               loggerFactory,
@@ -641,6 +635,101 @@ class SequencerNodeBootstrap(
             "sequencer-runtime-ready",
             futureSupervisor,
           )
+
+          // sequencer authentication uses a different set of signing keys and thus should not use session keys
+          syncCryptoForAuthentication = SynchronizerCryptoClient.create(
+            sequencerId,
+            synchronizerId,
+            topologyClient,
+            staticSynchronizerParameters,
+            crypto,
+            new SynchronizerCryptoPureApi(staticSynchronizerParameters, crypto.pureCrypto),
+            parameters.batchingConfig.parallelism,
+            parameters.processingTimeouts,
+            futureSupervisor,
+            loggerFactory,
+          )
+
+          authenticationConfig = SequencerAuthenticationConfig(
+            config.publicApi.nonceExpirationInterval,
+            config.publicApi.maxTokenExpirationInterval,
+          )
+
+          synchronizerParamsLookup = SynchronizerParametersLookup
+            .forSequencerSynchronizerParameters(
+              staticSynchronizerParameters,
+              config.publicApi.overrideMaxRequestSize,
+              topologyClient,
+              loggerFactory,
+            )
+
+          topologyStateForInitializationService =
+            new StoreBasedTopologyStateForInitializationService(
+              synchronizerTopologyStore,
+              synchronizerLoggerFactory,
+            )
+
+          sequencerSynchronizerParamsLookup: DynamicSynchronizerParametersLookup[
+            SequencerSynchronizerParameters
+          ] =
+            SynchronizerParametersLookup.forSequencerSynchronizerParameters(
+              staticSynchronizerParameters,
+              config.publicApi.overrideMaxRequestSize,
+              topologyClient,
+              loggerFactory,
+            )
+
+          sequencerChannelServiceO = Option.when(
+            parameters.unsafeEnableOnlinePartyReplication
+          )(
+            GrpcSequencerChannelService(
+              authenticationConfig.check,
+              clock,
+              staticSynchronizerParameters.protocolVersion,
+              parameters.processingTimeouts,
+              loggerFactory,
+            )
+          )
+
+          sequencerServiceCell = new SingleUseCell[GrpcSequencerService]
+
+          authenticationServices = {
+            val authenticationService = memberAuthServiceFactory.createAndSubscribe(
+              syncCryptoForAuthentication,
+              new MemberAuthenticationStore(),
+              // closing the subscription when the token expires will force the client to try to reconnect
+              // immediately and notice it is unauthenticated, which will cause it to also start re-authenticating
+              // it's important to disconnect the member AFTER we expired the token, as otherwise, the member
+              // can still re-subscribe with the token just before we removed it
+              Traced.lift { case (member, tc) =>
+                sequencerServiceCell
+                  .getOrElse(throw new IllegalStateException("sequencer service not initialized"))
+                  .disconnectMember(member)(tc)
+                sequencerChannelServiceO.foreach(_.disconnectMember(member)(tc))
+              },
+              runtimeReadyPromise.futureUS.map(_ =>
+                ()
+              ), // on shutdown, MemberAuthenticationStore will be closed via closeContext
+            )
+
+            val sequencerAuthenticationService =
+              new GrpcSequencerAuthenticationService(
+                authenticationService,
+                staticSynchronizerParameters.protocolVersion,
+                loggerFactory,
+              )
+
+            val sequencerAuthInterceptor =
+              new SequencerAuthenticationServerInterceptor(authenticationService, loggerFactory)
+
+            AuthenticationServices(
+              syncCryptoForAuthentication,
+              authenticationService,
+              sequencerAuthenticationService,
+              sequencerAuthInterceptor,
+            )
+          }
+
           sequencer <- EitherT
             .right[String](
               sequencerFactory.create(
@@ -655,18 +744,22 @@ class SequencerNodeBootstrap(
                 topologyAndSequencerSnapshot.flatMap { case (_, sequencerSnapshot) =>
                   sequencerSnapshot
                 },
+                Some(authenticationServices),
               )
             )
-          synchronizerParamsLookup = SynchronizerParametersLookup
-            .forSequencerSynchronizerParameters(
-              staticSynchronizerParameters,
-              config.publicApi.overrideMaxRequestSize,
-              topologyClient,
-              loggerFactory,
-            )
-          firstSequencerCounterServeableForSequencer <-
-            EitherT
-              .right[String](sequencer.firstSequencerCounterServeableForSequencer)
+
+          sequencerService = GrpcSequencerService(
+            sequencer,
+            arguments.metrics,
+            authenticationConfig.check,
+            clock,
+            sequencerSynchronizerParamsLookup,
+            parameters,
+            staticSynchronizerParameters.protocolVersion,
+            topologyStateForInitializationService,
+            loggerFactory,
+          )
+          _ = sequencerServiceCell.putIfAbsent(sequencerService)
 
           _ = addCloseable(sequencedEventStore)
           sequencerClient = new SequencerClientImplPekko[
@@ -714,38 +807,22 @@ class SequencerNodeBootstrap(
             parameters.exitOnFatalFailures,
             loggerFactory,
             futureSupervisor,
-            firstSequencerCounterServeableForSequencer, // TODO(#18401): Review this value
           )
           timeTracker = SynchronizerTimeTracker(
             config.timeTracker,
             clock,
             sequencerClient,
-            staticSynchronizerParameters.protocolVersion,
             timeouts,
             loggerFactory,
           )
           _ = topologyClient.setSynchronizerTimeTracker(timeTracker)
 
-          // sequencer authentication uses a different set of signing keys and thus should not use session keys
-          syncCryptoForAuthentication = SynchronizerCryptoClient.create(
-            sequencerId,
-            synchronizerId,
-            topologyClient,
-            staticSynchronizerParameters,
-            crypto,
-            new SynchronizerCryptoPureApi(staticSynchronizerParameters, crypto.pureCrypto),
-            parameters.batchingConfig.parallelism.unwrap,
-            parameters.processingTimeouts,
-            futureSupervisor,
-            loggerFactory,
-          )
           sequencerRuntime = new SequencerRuntime(
             sequencerId,
             sequencer,
             sequencerClient,
             staticSynchronizerParameters,
             parameters,
-            config.publicApi,
             timeTracker,
             arguments.metrics,
             indexedSynchronizer,
@@ -760,21 +837,17 @@ class SequencerNodeBootstrap(
             ),
             storage,
             clock,
-            SequencerAuthenticationConfig(
-              config.publicApi.nonceExpirationInterval,
-              config.publicApi.maxTokenExpirationInterval,
-            ),
             Seq(sequencerId) ++ membersToRegister,
-            memberAuthServiceFactory,
-            new StoreBasedTopologyStateForInitializationService(
-              synchronizerTopologyStore,
-              synchronizerLoggerFactory,
-            ),
+            authenticationServices,
+            sequencerService,
+            sequencerChannelServiceO,
             Some(synchronizerOutboxFactory),
             synchronizerLoggerFactory,
             runtimeReadyPromise,
           )
+
           _ <- sequencerRuntime.initializeAll()
+
           _ = addCloseable(sequencer)
           server <- createSequencerServer(
             sequencerRuntime,
@@ -843,7 +916,9 @@ class SequencerNodeBootstrap(
       timeouts,
       Seq(storage),
     )
-    val liveness = LivenessHealthService.alwaysAlive(logger, timeouts)
+    // We use the storage as a fatal dependency so that we transition liveness to NOT_SERVING if
+    // the storage fails continuously for longer than `failedToFatalDelay`.
+    val liveness = LivenessHealthService(logger, timeouts, fatalDependencies = Seq(storage))
     (readiness, liveness)
   }
 
@@ -897,7 +972,7 @@ class SequencerNodeBootstrap(
 }
 
 class SequencerNode(
-    config: SequencerNodeConfigCommon,
+    config: SequencerNodeConfig,
     override protected val clock: Clock,
     val sequencer: SequencerRuntime,
     override val adminToken: CantonAdminToken,

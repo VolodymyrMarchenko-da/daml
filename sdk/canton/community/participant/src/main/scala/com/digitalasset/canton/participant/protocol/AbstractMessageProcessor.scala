@@ -57,18 +57,16 @@ abstract class AbstractMessageProcessor(
         requestTimestamp,
         commitTime,
       )
-      _ <- FutureUnlessShutdown.outcomeF(
-        ephemeral.recordOrderPublisher.tick(
-          // providing directly a SequencerIndexMoved with RequestCounter for the non-submitting participant rejections
-          eventO.getOrElse(
-            SequencerIndexMoved(
-              synchronizerId = synchronizerId,
-              requestCounterO = Some(requestCounter),
-              sequencerCounter = requestSequencerCounter,
-              recordTime = requestTimestamp,
-            )
+      _ <- ephemeral.recordOrderPublisher.tick(
+        // providing directly a SequencerIndexMoved with RequestCounter for the non-submitting participant rejections
+        eventO.getOrElse(
+          SequencerIndexMoved(
+            synchronizerId = synchronizerId,
+            recordTime = requestTimestamp,
           )
-        )
+        ),
+        requestSequencerCounter,
+        Some(requestCounter),
       )
     } yield ()
 
@@ -125,7 +123,7 @@ abstract class AbstractMessageProcessor(
           )
           .valueOr {
             // Swallow Left errors to avoid stopping request processing, as sending response could fail for arbitrary reasons
-            // if the sequencer rejects them (e.g max sequencing time has elapsed)
+            // if the sequencer rejects them (e.g. max sequencing time has elapsed)
             err =>
               logger.warn(s"Request $requestId: Failed to send responses: ${err.show}")
           }

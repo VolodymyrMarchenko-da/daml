@@ -3,7 +3,7 @@
 
 package com.digitalasset.canton.http.json.v2
 
-import com.daml.error.ContextualizedErrorLogger
+import cats.implicits.toTraverseOps
 import com.daml.ledger.api.v2 as lapi
 import com.digitalasset.canton.http.json.v2.JsContractEntry.JsContractEntry
 import com.digitalasset.canton.http.json.v2.JsPrepareSubmissionRequest
@@ -18,6 +18,7 @@ import com.digitalasset.canton.http.json.v2.JsSchema.{
   JsTransactionTree,
   JsTreeEvent,
 }
+import com.digitalasset.canton.logging.ContextualizedErrorLogger
 import com.digitalasset.canton.serialization.ProtoConverter
 import com.digitalasset.daml.lf.data.Ref
 import com.google.rpc.status.Status
@@ -28,9 +29,23 @@ import scala.concurrent.{ExecutionContext, Future}
 import scala.language.implicitConversions
 
 trait ProtocolConverter[LAPI, JS] {
+
+  /** Invalid argument on input.
+    */
+  protected def invalidArgument(actual: Any, expectedType: String) =
+    throw new IllegalArgumentException(
+      s"Expected $expectedType, got $actual"
+    )
+
+  /** Denotes unexpected/invalid value to convert. Usually Empty elements from gRPC (that are not
+    * allowed to be empty in a normal situation).
+    */
+  def illegalValue(value: String) = throw new IllegalStateException(
+    s"Value $value was not expected here"
+  )
   def jsFail(err: String): Nothing = throw new IllegalArgumentException(
     err
-  ) // TODO (i19398) improve error handling
+  )
 }
 
 class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
@@ -43,8 +58,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
   implicit def toCirce(js: ujson.Value): io.circe.Json = CirceJson(js)
 
   def convertCommands(commands: Seq[JsCommand.Command])(implicit
-      token: Option[String],
-      contextualizedErrorLogger: ContextualizedErrorLogger,
+      contextualizedErrorLogger: ContextualizedErrorLogger
   ): Future[Seq[lapi.commands.Command.Command]] = Future.sequence(commands.map {
     case JsCommand.CreateCommand(template_id, create_arguments) =>
       for {
@@ -127,8 +141,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
   object Commands extends ProtocolConverter[lapi.commands.Commands, JsCommands] {
 
     def fromJson(jsCommands: JsCommands)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.commands.Commands] = {
       import jsCommands.*
 
@@ -137,7 +150,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
         .map(cc =>
           lapi.commands.Commands(
             workflowId = workflowId.getOrElse(""),
-            applicationId = applicationId.getOrElse(""),
+            userId = userId.getOrElse(""),
             commandId = commandId,
             commands = cc.map(lapi.commands.Command(_)),
             deduplicationPeriod = deduplicationPeriod.getOrElse(
@@ -151,6 +164,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
             disclosedContracts = disclosedContracts,
             synchronizerId = synchronizerId.getOrElse(""),
             packageIdSelectionPreference = packageIdSelectionPreference,
+            prefetchContractKeys = Nil,
           )
         )
     }
@@ -158,13 +172,13 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
     def toJson(
         lapiCommands: lapi.commands.Commands
     )(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsCommands] = {
       val jsCommands: Seq[Future[JsCommand.Command]] = lapiCommands.commands
         .map(_.command)
         .map {
-          case lapi.commands.Command.Command.Empty => jsFail("Invalid value")
+          case lapi.commands.Command.Command.Empty =>
+            illegalValue(lapi.commands.Command.Command.Empty.toString())
           case lapi.commands.Command.Command.Create(createCommand) =>
             for {
               contractArgs <- schemaProcessors.contractArgFromProtoToJson(
@@ -231,7 +245,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
           JsCommands(
             commands = cmds,
             workflowId = Some(lapiCommands.workflowId),
-            applicationId = Some(lapiCommands.applicationId),
+            userId = Some(lapiCommands.userId),
             commandId = lapiCommands.commandId,
             deduplicationPeriod = Some(lapiCommands.deduplicationPeriod),
             disclosedContracts = lapiCommands.disclosedContracts,
@@ -252,8 +266,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
     def fromJson(
         iview: JsInterfaceView
     )(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.event.InterfaceView] = for {
       record <- iview.viewValue
         .map { v =>
@@ -275,8 +288,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
     def toJson(
         obj: lapi.event.InterfaceView
     )(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsInterfaceView] =
       for {
         record <- schemaProcessors.contractArgFromProtoToJson(
@@ -292,11 +304,10 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
 
   object Event extends ProtocolConverter[lapi.event.Event.Event, JsEvent.Event] {
     def toJson(event: lapi.event.Event.Event)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsEvent.Event] =
       event match {
-        case lapi.event.Event.Event.Empty => jsFail("Invalid value")
+        case lapi.event.Event.Event.Empty => illegalValue(lapi.event.Event.Event.Empty.toString())
         case lapi.event.Event.Event.Created(value) =>
           CreatedEvent.toJson(value)
         case lapi.event.Event.Event.Archived(value) =>
@@ -306,8 +317,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
       }
 
     def fromJson(event: JsEvent.Event)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.event.Event.Event] = event match {
       case createdEvent: JsEvent.CreatedEvent =>
         CreatedEvent.fromJson(createdEvent).map(lapi.event.Event.Event.Created(_))
@@ -327,7 +337,8 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
         event: lapi.topology_transaction.TopologyEvent.Event
     ): Future[JsTopologyEvent.Event] =
       event match {
-        case lapi.topology_transaction.TopologyEvent.Event.Empty => jsFail("Invalid value")
+        case lapi.topology_transaction.TopologyEvent.Event.Empty =>
+          illegalValue(lapi.topology_transaction.TopologyEvent.Event.Empty.toString())
         case lapi.topology_transaction.TopologyEvent.Event.ParticipantAuthorizationChanged(value) =>
           Future(ParticipantAuthorizationChanged.toJson(value))
         case lapi.topology_transaction.TopologyEvent.Event.ParticipantAuthorizationRevoked(value) =>
@@ -353,8 +364,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
   object Transaction extends ProtocolConverter[lapi.transaction.Transaction, JsTransaction] {
 
     def toJson(v: lapi.transaction.Transaction)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsTransaction] =
       Future
         .sequence(v.events.map(e => Event.toJson(e.event)))
@@ -373,8 +383,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
         )
 
     def fromJson(v: JsTransaction)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.transaction.Transaction] = Future
       .sequence(v.events.map(e => Event.fromJson(e)))
       .map { ev =>
@@ -432,45 +441,17 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
     def toJson(
         lapiTransactionTree: lapi.transaction.TransactionTree
     )(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsTransactionTree] = {
       val jsEventsById = lapiTransactionTree.eventsById.view
         .mapValues(_.kind)
         .mapValues[Future[JsTreeEvent.TreeEvent]] {
-          case lapi.transaction.TreeEvent.Kind.Empty => jsFail("Empty event")
+          case lapi.transaction.TreeEvent.Kind.Empty =>
+            illegalValue(lapi.transaction.TreeEvent.Kind.Empty.toString())
           case lapi.transaction.TreeEvent.Kind.Created(created) =>
             CreatedEvent.toJson(created).map(JsTreeEvent.CreatedTreeEvent(_))
           case lapi.transaction.TreeEvent.Kind.Exercised(exercised) =>
-            val apiTemplateId = exercised.getTemplateId
-
-            val choiceName = Ref.ChoiceName.assertFromString(exercised.choice)
-            for {
-              choiceArgs <- schemaProcessors.choiceArgsFromProtoToJson(
-                template = apiTemplateId,
-                choiceName = choiceName,
-                protoArgs = exercised.getChoiceArgument,
-              )
-              exerciseResult <- schemaProcessors.exerciseResultFromProtoToJson(
-                apiTemplateId,
-                choiceName,
-                exercised.getExerciseResult,
-              )
-            } yield JsTreeEvent.ExercisedTreeEvent(
-              offset = exercised.offset,
-              nodeId = exercised.nodeId,
-              contractId = exercised.contractId,
-              templateId = IdentifierConverter.toJson(apiTemplateId),
-              interfaceId = exercised.interfaceId.map(IdentifierConverter.toJson),
-              choice = exercised.choice,
-              choiceArgument = choiceArgs,
-              actingParties = exercised.actingParties,
-              consuming = exercised.consuming,
-              witnessParties = exercised.witnessParties,
-              lastDescendantNodeId = exercised.lastDescendantNodeId,
-              exerciseResult = exerciseResult,
-              packageName = exercised.packageName,
-            )
+            ExercisedEvent.toJson(exercised).map(JsTreeEvent.ExercisedTreeEvent(_))
         }
       Future
         .traverse(jsEventsById.toSeq) { case (key, fv) =>
@@ -495,8 +476,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
     def fromJson(
         jsTransactionTree: JsTransactionTree
     )(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.transaction.TransactionTree] = {
       val lapiEventsById = jsTransactionTree.eventsById.view
         .mapValues {
@@ -505,43 +485,10 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
               .fromJson(created)
               .map(ev => lapi.transaction.TreeEvent(lapi.transaction.TreeEvent.Kind.Created(ev)))
 
-          case exercised: JsTreeEvent.ExercisedTreeEvent =>
-            val apiTemplateId = IdentifierConverter.fromJson(exercised.templateId)
-            val choiceName = Ref.ChoiceName.assertFromString(exercised.choice)
-            for {
-              choiceArgs <- schemaProcessors.choiceArgsFromJsonToProto(
-                template = apiTemplateId,
-                choiceName = choiceName,
-                jsonArgsValue = ujson.read(
-                  CirceJson.transform(exercised.choiceArgument, StringRenderer()).toString
-                ),
-              )
-              lapiExerciseResult <- schemaProcessors.exerciseResultFromJsonToProto(
-                template = apiTemplateId,
-                choiceName = choiceName,
-                value = ujson.read(
-                  CirceJson.transform(exercised.exerciseResult, StringRenderer()).toString
-                ),
-              )
-            } yield lapi.transaction.TreeEvent(
-              kind = lapi.transaction.TreeEvent.Kind.Exercised(
-                lapi.event.ExercisedEvent(
-                  offset = exercised.offset,
-                  nodeId = exercised.nodeId,
-                  contractId = exercised.contractId,
-                  templateId = Some(apiTemplateId),
-                  interfaceId = exercised.interfaceId.map(IdentifierConverter.fromJson),
-                  choice = exercised.choice,
-                  choiceArgument = Some(choiceArgs),
-                  actingParties = exercised.actingParties,
-                  consuming = exercised.consuming,
-                  witnessParties = exercised.witnessParties,
-                  exerciseResult = lapiExerciseResult,
-                  packageName = exercised.packageName,
-                  lastDescendantNodeId = exercised.lastDescendantNodeId,
-                )
-              )
-            )
+          case JsTreeEvent.ExercisedTreeEvent(exercised) =>
+            ExercisedEvent
+              .fromJson(exercised)
+              .map(ev => lapi.transaction.TreeEvent(lapi.transaction.TreeEvent.Kind.Exercised(ev)))
         }
       Future
         .traverse(lapiEventsById.toSeq) { case (key, fv) =>
@@ -572,8 +519,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
     def toJson(
         response: lapi.command_service.SubmitAndWaitForTransactionTreeResponse
     )(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsSubmitAndWaitForTransactionTreeResponse] =
       TransactionTree
         .toJson(response.getTransaction)
@@ -586,8 +532,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
     def fromJson(
         response: JsSubmitAndWaitForTransactionTreeResponse
     )(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.command_service.SubmitAndWaitForTransactionTreeResponse] =
       TransactionTree
         .fromJson(response.transactionTree)
@@ -607,8 +552,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
     def toJson(
         response: lapi.command_service.SubmitAndWaitForTransactionResponse
     )(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsSubmitAndWaitForTransactionResponse] =
       Transaction
         .toJson(response.getTransaction)
@@ -621,13 +565,46 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
     def fromJson(
         jsResponse: JsSubmitAndWaitForTransactionResponse
     )(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.command_service.SubmitAndWaitForTransactionResponse] = Transaction
       .fromJson(jsResponse.transaction)
       .map(tx =>
         lapi.command_service.SubmitAndWaitForTransactionResponse(
           transaction = Some(tx)
+        )
+      )
+  }
+
+  object SubmitAndWaitForTransactionRequest
+      extends ProtocolConverter[
+        lapi.command_service.SubmitAndWaitRequest,
+        JsSubmitAndWaitForTransactionRequest,
+      ] {
+
+    def toJson(
+        request: lapi.command_service.SubmitAndWaitForTransactionRequest
+    )(implicit
+        contextualizedErrorLogger: ContextualizedErrorLogger
+    ): Future[JsSubmitAndWaitForTransactionRequest] =
+      Commands
+        .toJson(request.getCommands)
+        .map(commands =>
+          JsSubmitAndWaitForTransactionRequest(
+            commands = commands,
+            transactionFormat = request.getTransactionFormat,
+          )
+        )
+
+    def fromJson(
+        jsRequest: JsSubmitAndWaitForTransactionRequest
+    )(implicit
+        contextualizedErrorLogger: ContextualizedErrorLogger
+    ): Future[lapi.command_service.SubmitAndWaitForTransactionRequest] = Commands
+      .fromJson(jsRequest.commands)
+      .map(commands =>
+        lapi.command_service.SubmitAndWaitForTransactionRequest(
+          commands = Some(commands),
+          transactionFormat = Some(jsRequest.transactionFormat),
         )
       )
   }
@@ -640,8 +617,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
     def toJson(
         response: lapi.event_query_service.GetEventsByContractIdResponse
     )(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsGetEventsByContractIdResponse] =
       for {
         createdEvents <- response.created
@@ -667,8 +643,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
     def fromJson(
         obj: JsGetEventsByContractIdResponse
     )(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.event_query_service.GetEventsByContractIdResponse] = for {
       createdEvents <- obj.created
         .map(c => CreatedEvent.fromJson(c.createdEvent).map(Some(_)))
@@ -694,6 +669,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
       templateId = IdentifierConverter.toJson(e.getTemplateId),
       witnessParties = e.witnessParties,
       packageName = e.packageName,
+      implementedInterfaces = e.implementedInterfaces.map(IdentifierConverter.toJson),
     )
 
     def fromJson(ev: JsEvent.ArchivedEvent): lapi.event.ArchivedEvent = lapi.event.ArchivedEvent(
@@ -703,13 +679,13 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
       templateId = Some(IdentifierConverter.fromJson(ev.templateId)),
       witnessParties = ev.witnessParties,
       packageName = ev.packageName,
+      implementedInterfaces = ev.implementedInterfaces.map(IdentifierConverter.fromJson),
     )
   }
 
   object CreatedEvent extends ProtocolConverter[lapi.event.CreatedEvent, JsEvent.CreatedEvent] {
     def toJson(created: lapi.event.CreatedEvent)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsEvent.CreatedEvent] =
       for {
         contractKey <- created.contractKey
@@ -750,8 +726,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
       )
 
     def fromJson(createdEvent: JsEvent.CreatedEvent)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.event.CreatedEvent] = {
       val templateId = IdentifierConverter.fromJson(createdEvent.templateId)
       for {
@@ -792,21 +767,20 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
   object ExercisedEvent
       extends ProtocolConverter[lapi.event.ExercisedEvent, JsEvent.ExercisedEvent] {
     def toJson(exercised: lapi.event.ExercisedEvent)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsEvent.ExercisedEvent] =
       for {
         choiceArgs <-
           schemaProcessors
             .choiceArgsFromProtoToJson(
-              exercised.getTemplateId,
+              exercised.interfaceId.getOrElse(exercised.getTemplateId),
               Ref.ChoiceName.assertFromString(exercised.choice),
               exercised.getChoiceArgument,
             )
         exerciseResult <-
           schemaProcessors
             .exerciseResultFromProtoToJson(
-              exercised.getTemplateId,
+              exercised.interfaceId.getOrElse(exercised.getTemplateId),
               Ref.ChoiceName.assertFromString(exercised.choice),
               exercised.getExerciseResult,
             )
@@ -824,23 +798,23 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
         lastDescendantNodeId = exercised.lastDescendantNodeId,
         exerciseResult = exerciseResult,
         packageName = exercised.packageName,
+        implementedInterfaces = exercised.implementedInterfaces,
       )
 
     def fromJson(exericisedEvent: JsEvent.ExercisedEvent)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.event.ExercisedEvent] =
       for {
         choiceArgs <-
           schemaProcessors.choiceArgsFromJsonToProto(
-            exericisedEvent.templateId,
+            exericisedEvent.interfaceId.getOrElse(exericisedEvent.templateId),
             Ref.ChoiceName.assertFromString(exericisedEvent.choice),
             exericisedEvent.choiceArgument,
           )
         choiceResult <-
           schemaProcessors
             .exerciseResultFromJsonToProto(
-              exericisedEvent.templateId,
+              exericisedEvent.interfaceId.getOrElse(exericisedEvent.templateId),
               Ref.ChoiceName.assertFromString(exericisedEvent.choice),
               exericisedEvent.exerciseResult,
             )
@@ -858,6 +832,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
         lastDescendantNodeId = exericisedEvent.lastDescendantNodeId,
         exerciseResult = choiceResult,
         packageName = exericisedEvent.packageName,
+        implementedInterfaces = exericisedEvent.implementedInterfaces,
       )
 
   }
@@ -869,8 +844,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
       ] {
 
     def toJson(v: lapi.reassignment.AssignedEvent)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsAssignedEvent] =
       CreatedEvent
         .toJson(v.getCreatedEvent)
@@ -941,8 +915,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
     def toJson(
         v: lapi.state_service.GetActiveContractsResponse.ContractEntry
     )(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsContractEntry] =
       v match {
         case lapi.state_service.GetActiveContractsResponse.ContractEntry.Empty =>
@@ -981,8 +954,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
     def fromJson(
         jsContractEntry: JsContractEntry
     )(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.state_service.GetActiveContractsResponse.ContractEntry] = jsContractEntry match {
       case JsContractEntry.JsEmpty =>
         Future(lapi.state_service.GetActiveContractsResponse.ContractEntry.Empty)
@@ -1038,8 +1010,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
         JsGetActiveContractsResponse,
       ] {
     def toJson(v: lapi.state_service.GetActiveContractsResponse)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsGetActiveContractsResponse] =
       ContractEntry
         .toJson(v.contractEntry)
@@ -1053,8 +1024,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
     def fromJson(
         v: JsGetActiveContractsResponse
     )(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.state_service.GetActiveContractsResponse] =
       ContractEntry
         .fromJson(v.contractEntry)
@@ -1067,16 +1037,16 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
   }
 
   object ReassignmentEvent
-      extends ProtocolConverter[lapi.reassignment.Reassignment.Event, JsReassignmentEvent] {
-    def toJson(v: lapi.reassignment.Reassignment.Event)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+      extends ProtocolConverter[lapi.reassignment.ReassignmentEvent.Event, JsReassignmentEvent] {
+    def toJson(v: lapi.reassignment.ReassignmentEvent.Event)(implicit
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsReassignmentEvent] =
       v match {
-        case lapi.reassignment.Reassignment.Event.Empty => jsFail("Invalid value")
-        case lapi.reassignment.Reassignment.Event.UnassignedEvent(value) =>
+        case lapi.reassignment.ReassignmentEvent.Event.Empty =>
+          illegalValue(lapi.reassignment.ReassignmentEvent.Event.Empty.toString())
+        case lapi.reassignment.ReassignmentEvent.Event.Unassigned(value) =>
           Future(JsReassignmentEvent.JsUnassignedEvent(value))
-        case lapi.reassignment.Reassignment.Event.AssignedEvent(value) =>
+        case lapi.reassignment.ReassignmentEvent.Event.Assigned(value) =>
           CreatedEvent
             .toJson(value.getCreatedEvent)
             .map(ce =>
@@ -1092,15 +1062,14 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
       }
 
     def fromJson(jsObj: JsReassignmentEvent)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
-    ): Future[lapi.reassignment.Reassignment.Event] =
+        contextualizedErrorLogger: ContextualizedErrorLogger
+    ): Future[lapi.reassignment.ReassignmentEvent.Event] =
       jsObj match {
         case event: JsReassignmentEvent.JsAssignmentEvent =>
           CreatedEvent
             .fromJson(event.createdEvent)
             .map(ce =>
-              lapi.reassignment.Reassignment.Event.AssignedEvent(
+              lapi.reassignment.ReassignmentEvent.Event.Assigned(
                 value = lapi.reassignment.AssignedEvent(
                   source = event.source,
                   target = event.target,
@@ -1113,42 +1082,39 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
             )
 
         case JsReassignmentEvent.JsUnassignedEvent(value) =>
-          Future.successful(lapi.reassignment.Reassignment.Event.UnassignedEvent(value))
+          Future.successful(lapi.reassignment.ReassignmentEvent.Event.Unassigned(value))
       }
 
   }
-
   object Reassignment extends ProtocolConverter[lapi.reassignment.Reassignment, JsReassignment] {
     def toJson(v: lapi.reassignment.Reassignment)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
-    ): Future[JsReassignment] = ReassignmentEvent
-      .toJson(v.event)
+        contextualizedErrorLogger: ContextualizedErrorLogger
+    ): Future[JsReassignment] = v.events
+      .traverse(e => ReassignmentEvent.toJson(e.event))
       .map(e =>
         JsReassignment(
           updateId = v.updateId,
           commandId = v.commandId,
           workflowId = v.workflowId,
           offset = v.offset,
-          event = e,
+          events = e,
           traceContext = v.traceContext,
           recordTime = v.getRecordTime,
         )
       )
 
     def fromJson(value: JsReassignment)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.reassignment.Reassignment] =
-      ReassignmentEvent
-        .fromJson(value.event)
+      value.events
+        .traverse(e => ReassignmentEvent.fromJson(e))
         .map(re =>
           lapi.reassignment.Reassignment(
             updateId = value.updateId,
             commandId = value.commandId,
             workflowId = value.workflowId,
             offset = value.offset,
-            event = re,
+            events = re.map(lapi.reassignment.ReassignmentEvent(_)),
             traceContext = value.traceContext,
             recordTime = Some(value.recordTime),
           )
@@ -1158,11 +1124,11 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
   object GetUpdatesResponse
       extends ProtocolConverter[lapi.update_service.GetUpdatesResponse, JsGetUpdatesResponse] {
     def toJson(obj: lapi.update_service.GetUpdatesResponse)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsGetUpdatesResponse] =
       ((obj.update match {
-        case lapi.update_service.GetUpdatesResponse.Update.Empty => jsFail("Invalid value")
+        case lapi.update_service.GetUpdatesResponse.Update.Empty =>
+          illegalValue(lapi.update_service.GetUpdatesResponse.Update.Empty.toString())
         case lapi.update_service.GetUpdatesResponse.Update.Transaction(value) =>
           Transaction.toJson(value).map(JsUpdate.Transaction.apply)
         case lapi.update_service.GetUpdatesResponse.Update.Reassignment(value) =>
@@ -1174,8 +1140,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
       }): Future[JsUpdate.Update]).map(update => JsGetUpdatesResponse(update))
 
     def fromJson(obj: JsGetUpdatesResponse)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.update_service.GetUpdatesResponse] =
       (obj.update match {
         case JsUpdate.OffsetCheckpoint(value) =>
@@ -1201,6 +1166,49 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
       }).map(lapi.update_service.GetUpdatesResponse(_))
   }
 
+  object GetUpdateResponse
+      extends ProtocolConverter[lapi.update_service.GetUpdateResponse, JsGetUpdatesResponse] {
+    def toJson(obj: lapi.update_service.GetUpdateResponse)(implicit
+        contextualizedErrorLogger: ContextualizedErrorLogger
+    ): Future[JsGetUpdateResponse] =
+      ((obj.update match {
+        case lapi.update_service.GetUpdateResponse.Update.Empty =>
+          illegalValue(lapi.update_service.GetUpdateResponse.Update.Empty.toString())
+        case lapi.update_service.GetUpdateResponse.Update.Transaction(value) =>
+          Transaction.toJson(value).map(JsUpdate.Transaction.apply)
+        case lapi.update_service.GetUpdateResponse.Update.Reassignment(value) =>
+          Reassignment.toJson(value).map(JsUpdate.Reassignment.apply)
+        case lapi.update_service.GetUpdateResponse.Update.TopologyTransaction(value) =>
+          TopologyTransaction.toJson(value).map(JsUpdate.TopologyTransaction.apply)
+      }): Future[JsUpdate.Update]).map(update => JsGetUpdateResponse(update))
+
+    def fromJson(obj: JsGetUpdateResponse)(implicit
+        contextualizedErrorLogger: ContextualizedErrorLogger
+    ): Future[lapi.update_service.GetUpdateResponse] =
+      (obj.update match {
+        case JsUpdate.Reassignment(value) =>
+          Reassignment
+            .fromJson(value)
+            .map(
+              lapi.update_service.GetUpdateResponse.Update.Reassignment.apply
+            )
+        case JsUpdate.Transaction(value) =>
+          Transaction.fromJson(value).map { tr =>
+            lapi.update_service.GetUpdateResponse.Update.Transaction(tr)
+          }
+        case JsUpdate.TopologyTransaction(value) =>
+          TopologyTransaction
+            .fromJson(value)
+            .map(lapi.update_service.GetUpdateResponse.Update.TopologyTransaction.apply)
+        case JsUpdate.OffsetCheckpoint(_) =>
+          Future.failed(
+            new RuntimeException(
+              "The unexpected happened! A pointwise query should not have returned an OffsetCheckpoint update."
+            )
+          )
+      }).map(lapi.update_service.GetUpdateResponse(_))
+  }
+
   object GetUpdateTreesResponse
       extends ProtocolConverter[
         lapi.update_service.GetUpdateTreesResponse,
@@ -1209,26 +1217,23 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
     def toJson(
         value: lapi.update_service.GetUpdateTreesResponse
     )(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsGetUpdateTreesResponse] =
       ((value.update match {
-        case lapi.update_service.GetUpdateTreesResponse.Update.Empty => jsFail("Invalid value")
+        case lapi.update_service.GetUpdateTreesResponse.Update.Empty =>
+          illegalValue(lapi.update_service.GetUpdateTreesResponse.Update.Empty.toString())
         case lapi.update_service.GetUpdateTreesResponse.Update.OffsetCheckpoint(value) =>
           Future(JsUpdateTree.OffsetCheckpoint(value))
         case lapi.update_service.GetUpdateTreesResponse.Update.TransactionTree(value) =>
           TransactionTree.toJson(value).map(JsUpdateTree.TransactionTree.apply)
         case lapi.update_service.GetUpdateTreesResponse.Update.Reassignment(value) =>
           Reassignment.toJson(value).map(JsUpdateTree.Reassignment.apply)
-        case lapi.update_service.GetUpdateTreesResponse.Update.TopologyTransaction(value) =>
-          TopologyTransaction.toJson(value).map(JsUpdateTree.TopologyTransaction.apply)
       }): Future[JsUpdateTree.Update]).map(update => JsGetUpdateTreesResponse(update))
 
     def fromJson(
         jsObj: JsGetUpdateTreesResponse
     )(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.update_service.GetUpdateTreesResponse] =
       (jsObj.update match {
         case JsUpdateTree.OffsetCheckpoint(value) =>
@@ -1243,10 +1248,6 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
           TransactionTree
             .fromJson(value)
             .map(lapi.update_service.GetUpdateTreesResponse.Update.TransactionTree.apply)
-        case JsUpdateTree.TopologyTransaction(value) =>
-          TopologyTransaction
-            .fromJson(value)
-            .map(lapi.update_service.GetUpdateTreesResponse.Update.TopologyTransaction.apply)
       }).map(lapi.update_service.GetUpdateTreesResponse(_))
   }
 
@@ -1258,14 +1259,12 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
     def toJson(
         obj: lapi.update_service.GetTransactionTreeResponse
     )(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsGetTransactionTreeResponse] =
       TransactionTree.toJson(obj.getTransaction).map(JsGetTransactionTreeResponse.apply)
 
     def fromJson(treeResponse: JsGetTransactionTreeResponse)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.update_service.GetTransactionTreeResponse] =
       TransactionTree
         .fromJson(treeResponse.transaction)
@@ -1279,14 +1278,12 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
         JsGetTransactionResponse,
       ] {
     def toJson(obj: lapi.update_service.GetTransactionResponse)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[JsGetTransactionResponse] =
       Transaction.toJson(obj.getTransaction).map(JsGetTransactionResponse.apply)
 
     def fromJson(obj: JsGetTransactionResponse)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.update_service.GetTransactionResponse] =
       Transaction
         .fromJson(obj.transaction)
@@ -1299,12 +1296,11 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
         JsPrepareSubmissionRequest,
       ] {
     def fromJson(obj: JsPrepareSubmissionRequest)(implicit
-        token: Option[String],
-        contextualizedErrorLogger: ContextualizedErrorLogger,
+        contextualizedErrorLogger: ContextualizedErrorLogger
     ): Future[lapi.interactive.interactive_submission_service.PrepareSubmissionRequest] = for {
       commands <- convertCommands(obj.commands)
     } yield lapi.interactive.interactive_submission_service.PrepareSubmissionRequest(
-      applicationId = obj.applicationId,
+      userId = obj.userId,
       commandId = obj.commandId,
       commands = commands.map(lapi.commands.Command(_)),
       minLedgerTime = obj.minLedgerTime,
@@ -1314,6 +1310,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
       synchronizerId = obj.synchronizerId,
       packageIdSelectionPreference = obj.packageIdSelectionPreference,
       verboseHashing = obj.verboseHashing,
+      prefetchContractKeys = Nil,
     )
   }
 
@@ -1355,7 +1352,7 @@ class ProtocolConverters(schemaProcessors: SchemaProcessors)(implicit
           partySignatures = obj.partySignatures,
           deduplicationPeriod = obj.deduplicationPeriod,
           submissionId = obj.submissionId,
-          applicationId = obj.applicationId,
+          userId = obj.userId,
           hashingSchemeVersion = obj.hashingSchemeVersion,
         )
       }
@@ -1372,7 +1369,7 @@ object IdentifierConverter extends ProtocolConverter[lapi.value.Identifier, Stri
           moduleName = moduleName,
           entityName = entityName,
         )
-      case _ => jsFail(s"Invalid identifier: $jsIdentifier")
+      case _ => invalidArgument(jsIdentifier, "<package>:<moduleName>:<entityName>")
     }
 
   def toJson(lapiIdentifier: lapi.value.Identifier): String =

@@ -3,9 +3,8 @@
 
 package com.digitalasset.canton.ledger.error.groups
 
-import com.daml.error.{
-  ContextualizedErrorLogger,
-  DamlError,
+import com.digitalasset.base.error.{
+  ContextualizedDamlError,
   DamlErrorWithDefiniteAnswer,
   ErrorCategory,
   ErrorCode,
@@ -14,6 +13,7 @@ import com.daml.error.{
   Resolution,
 }
 import com.digitalasset.canton.ledger.error.ParticipantErrorGroup.LedgerApiErrorGroup.AdminServicesErrorGroup.UserManagementServiceErrorGroup
+import com.digitalasset.canton.logging.ContextualizedErrorLogger
 
 object UserManagementServiceErrors extends UserManagementServiceErrorGroup {
 
@@ -29,7 +29,7 @@ object UserManagementServiceErrors extends UserManagementServiceErrorGroup {
       ) {
     final case class Reject(userId: String, reason: String)(implicit
         loggingContext: ContextualizedErrorLogger
-    ) extends DamlError(
+    ) extends ContextualizedDamlError(
           cause = s"Update operation for user id '$userId' failed due to: $reason"
         ) {
       override def resources: Seq[(ErrorResource, String)] = Seq(
@@ -52,7 +52,7 @@ object UserManagementServiceErrors extends UserManagementServiceErrorGroup {
       ) {
     final case class Reject(userId: String)(implicit
         loggingContext: ContextualizedErrorLogger
-    ) extends DamlError(
+    ) extends ContextualizedDamlError(
           cause = s"Maximum annotations size for user '$userId' has been exceeded"
         ) {
       override def resources: Seq[(ErrorResource, String)] = Seq(
@@ -77,7 +77,7 @@ object UserManagementServiceErrors extends UserManagementServiceErrorGroup {
       ) {
     final case class Reject(userId: String)(implicit
         loggingContext: ContextualizedErrorLogger
-    ) extends DamlError(
+    ) extends ContextualizedDamlError(
           cause =
             s"Update operation for user '$userId' failed due to a concurrent update to the same user"
         ) {

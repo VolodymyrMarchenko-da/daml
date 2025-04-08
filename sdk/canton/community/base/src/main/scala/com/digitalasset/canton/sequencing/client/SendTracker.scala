@@ -11,8 +11,8 @@ import com.daml.metrics.api.MetricsContext.withEmptyMetricsContext
 import com.digitalasset.canton.concurrent.DirectExecutionContext
 import com.digitalasset.canton.config.ProcessingTimeout
 import com.digitalasset.canton.data.CantonTimestamp
-import com.digitalasset.canton.error.BaseCantonError
-import com.digitalasset.canton.lifecycle.{FutureUnlessShutdown, *}
+import com.digitalasset.canton.error.CantonBaseError
+import com.digitalasset.canton.lifecycle.*
 import com.digitalasset.canton.logging.{NamedLoggerFactory, NamedLogging}
 import com.digitalasset.canton.metrics.SequencerClientMetrics
 import com.digitalasset.canton.sequencing.client.SendResult.{Error, Success, Timeout}
@@ -239,8 +239,9 @@ class SendTracker(
     val removeUnlessTimedOut = pendingSends.updateWith(messageId) {
       case Some(pending) if sequencedTimeO.exists(_ > pending.maxSequencingTime) => Some(pending)
       case other =>
-        // this shouldn't happen (as per above),  but let's leave a note in the logs if it does
-        if (other != current)
+        // a concurrent modification of the same message id is only possible when the SendTracker is shutting down
+        // otherwise this shouldn't happen (as per above comment), but let's leave a note in the logs if it does
+        if (!isClosing && other != current)
           logger.error(s"Concurrent modification of pending sends $other / $current")
         None
     }
@@ -269,7 +270,7 @@ class SendTracker(
           tsc.updateWithReceipt(
             _,
             deliverError.timestamp,
-            BaseCantonError
+            CantonBaseError
               .statusErrorCodes(deliverError.reason)
               .headOption
               .orElse(Some("unknown")),
@@ -308,11 +309,11 @@ class SendTracker(
       event: SequencedEvent[_]
   )(implicit traceContext: TraceContext): Option[(MessageId, SendResult)] =
     Option(event) collect {
-      case deliver @ Deliver(_, _, _, Some(messageId), _, _, _) =>
+      case deliver @ Deliver(_, _, _, _, Some(messageId), _, _, _) =>
         logger.trace(s"Send [$messageId] was successful")
         (messageId, SendResult.Success(deliver))
 
-      case error @ DeliverError(_, _, _, messageId, reason, _) =>
+      case error @ DeliverError(_, _, _, _, messageId, reason, _) =>
         logger.debug(s"Send [$messageId] failed: $reason")
         (messageId, SendResult.Error(error))
     }

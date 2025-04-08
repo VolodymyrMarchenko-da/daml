@@ -3,7 +3,6 @@
 
 package com.digitalasset.canton.platform.apiserver.services.command
 
-import com.daml.error.ContextualizedErrorLogger
 import com.daml.grpc.RpcProtoExtractors
 import com.daml.ledger.api.v2.command_service.{CommandServiceGrpc, SubmitAndWaitRequest}
 import com.daml.ledger.api.v2.command_submission_service.{SubmitRequest, SubmitResponse}
@@ -18,7 +17,7 @@ import com.digitalasset.canton.ledger.api.validation.{
   ValidateUpgradingPackageResolutions,
 }
 import com.digitalasset.canton.lifecycle.FutureUnlessShutdown
-import com.digitalasset.canton.logging.LoggingContextWithTrace
+import com.digitalasset.canton.logging.{ContextualizedErrorLogger, LoggingContextWithTrace}
 import com.digitalasset.canton.platform.apiserver.services.command.CommandServiceImplSpec.*
 import com.digitalasset.canton.platform.apiserver.services.tracking.SubmissionTracker
 import com.digitalasset.canton.platform.apiserver.services.{ApiCommandService, tracking}
@@ -67,7 +66,8 @@ class CommandServiceImplSpec
           loggerFactory,
         )
       ).use { stub =>
-        val request = SubmitAndWaitRequest.of(Some(commands))
+        val request =
+          SubmitAndWaitRequest.of(Some(commands))
         stub.submitAndWait(request).map { response =>
           verify(submissionTracker).track(
             eqTo(expectedSubmissionKey),
@@ -134,7 +134,8 @@ class CommandServiceImplSpec
         .call { () =>
           service
             .submitAndWait(
-              SubmitAndWaitRequest.of(Some(commands.copy(submissionId = submissionId)))
+              SubmitAndWaitRequest
+                .of(Some(commands.copy(submissionId = submissionId)))
             )(
               LoggingContextWithTrace.ForTesting
             )
@@ -276,7 +277,7 @@ object CommandServiceImplSpec {
   private val OkStatus = StatusProto.of(Status.Code.OK.value, "", Seq.empty)
 
   val commandId = "command ID"
-  val applicationId = "application ID"
+  val userId = "userID"
   val submissionId = Ref.SubmissionId.assertFromString("submissionId")
   val maxDeduplicationDuration = java.time.Duration.ofDays(1)
   val party = "Alice"
@@ -297,7 +298,7 @@ object CommandServiceImplSpec {
 
   val offset: Long = 12345678L
 
-  val completion = Completion(
+  val completion = Completion.defaultInstance.copy(
     commandId = "command ID",
     status = Some(OkStatus),
     updateId = "transaction ID",
@@ -307,13 +308,13 @@ object CommandServiceImplSpec {
   val expectedSubmissionKey = SubmissionTracker.SubmissionKey(
     commandId = commandId,
     submissionId = submissionId,
-    applicationId = applicationId,
+    userId = userId,
     parties = Set(party),
   )
 
-  private def someCommands() = Commands(
+  private def someCommands() = Commands.defaultInstance.copy(
     commandId = commandId,
-    applicationId = applicationId,
+    userId = userId,
     actAs = Seq(party),
     commands = Seq(command),
   )

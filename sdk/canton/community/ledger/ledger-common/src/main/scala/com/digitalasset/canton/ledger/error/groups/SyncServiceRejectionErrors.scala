@@ -3,8 +3,7 @@
 
 package com.digitalasset.canton.ledger.error.groups
 
-import com.daml.error.{
-  ContextualizedErrorLogger,
+import com.digitalasset.base.error.{
   DamlErrorWithDefiniteAnswer,
   ErrorCategory,
   ErrorCode,
@@ -14,6 +13,7 @@ import com.daml.error.{
   Resolution,
 }
 import com.digitalasset.canton.ledger.error.ParticipantErrorGroup.LedgerApiErrorGroup.SyncServiceRejectionErrorGroup
+import com.digitalasset.canton.logging.ContextualizedErrorLogger
 import com.digitalasset.daml.lf.transaction.GlobalKey
 
 @Explanation(

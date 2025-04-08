@@ -6,9 +6,11 @@ package com.digitalasset.canton.integration.tests
 import better.files.{File as BetterFile, *}
 import com.digitalasset.canton.HasExecutionContext
 import com.digitalasset.canton.config.StorageConfig.Memory
+import com.digitalasset.canton.integration.CommunityIntegrationTest
 import com.digitalasset.canton.integration.plugins.UseCommunityReferenceBlockSequencer
 import com.digitalasset.canton.integration.plugins.UseReferenceBlockSequencerBase.MultiSynchronizer
 import com.digitalasset.canton.integration.tests.DemoExampleIntegrationTest.referenceDemo
+import com.digitalasset.canton.integration.tests.examples.ExampleIntegrationTest
 
 object DemoExampleIntegrationTest {
   lazy val referenceDemo: BetterFile = "community" / "demo" / "src" / "pack" / "demo"
@@ -16,6 +18,7 @@ object DemoExampleIntegrationTest {
 
 sealed abstract class DemoExampleIntegrationTest
     extends ExampleIntegrationTest(referenceDemo / "demo.conf")
+    with CommunityIntegrationTest
     with HasExecutionContext {
 
   "run reference demo" in { implicit env =>

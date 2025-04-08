@@ -73,6 +73,24 @@ final class UpdateServiceAuthorization(
     authorizer.rpc(service.getTransactionById)(
       getTransactionByIdClaims(request)*
     )(request)
+
+  override def getUpdateByOffset(
+      request: GetUpdateByOffsetRequest
+  ): Future[GetUpdateResponse] =
+    authorizer.rpc(service.getUpdateByOffset)(
+      request.updateFormat.toList.flatMap(
+        RequiredClaims.updateFormatClaims[GetUpdateByOffsetRequest]
+      )*
+    )(request)
+
+  override def getUpdateById(
+      request: GetUpdateByIdRequest
+  ): Future[GetUpdateResponse] =
+    authorizer.rpc(service.getUpdateById)(
+      request.updateFormat.toList.flatMap(
+        RequiredClaims.updateFormatClaims[GetUpdateByIdRequest]
+      )*
+    )(request)
 }
 
 object UpdateServiceAuthorization {
@@ -85,11 +103,9 @@ object UpdateServiceAuthorization {
   def getTransactionByOffsetClaims(
       request: GetTransactionByOffsetRequest
   ): List[RequiredClaim[GetTransactionByOffsetRequest]] =
-    request.transactionFormat
-      .flatMap(_.eventFormat)
-      .toList
+    request.transactionFormat.toList
       .flatMap(
-        RequiredClaims.eventFormatClaims[GetTransactionByOffsetRequest]
+        RequiredClaims.transactionFormatClaims[GetTransactionByOffsetRequest]
       ) ::: RequiredClaims.readAsForAllParties[GetTransactionByOffsetRequest](
       request.requestingParties
     )
@@ -97,11 +113,9 @@ object UpdateServiceAuthorization {
   def getTransactionByIdClaims(
       request: GetTransactionByIdRequest
   ): List[RequiredClaim[GetTransactionByIdRequest]] =
-    request.transactionFormat
-      .flatMap(_.eventFormat)
-      .toList
+    request.transactionFormat.toList
       .flatMap(
-        RequiredClaims.eventFormatClaims[GetTransactionByIdRequest]
+        RequiredClaims.transactionFormatClaims[GetTransactionByIdRequest]
       ) ::: RequiredClaims.readAsForAllParties[GetTransactionByIdRequest](
       request.requestingParties
     )

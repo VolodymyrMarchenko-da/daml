@@ -1,5 +1,8 @@
 -- Copyright (c) 2025 Digital Asset (Switzerland) GmbH and/or its affiliates. All rights reserved.
 -- SPDX-License-Identifier: Apache-2.0
+
+{-# LANGUAGE CPP #-}
+
 module Daml.Script
   ( Script
 
@@ -22,6 +25,7 @@ module Daml.Script
   , actAs
   , readAs
   , disclose
+  , discloseMany
   , prefetchKeys
   , SubmitOptions
   , concurrently
@@ -107,6 +111,12 @@ module Daml.Script
   , submitUser
   , submitUserOn
   , tryToEither
+
+#ifdef DAML_CCTP
+  , Secp256k1KeyPair
+  , secp256k1generatekeypair
+  , secp256k1sign
+#endif
 
   , -- Upgrades features
     PackageId (..)  
